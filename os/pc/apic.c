@@ -362,4 +362,5 @@ lapicclock(Ureg *u, void*)
 {
 	timerintr(u, 0);
 	wrmsr(0x6E0, tscticks(nil) + lapictimer.max);	/* re-arm for periodic tick */
+	consuartpoll();	/* poll the serial console for input (9vm can't IRQ an idle vCPU) */
 }

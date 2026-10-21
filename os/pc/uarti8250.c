@@ -526,6 +526,18 @@ i8250interrupt(Ureg*, void* arg)
 	}
 }
 
+/*
+ * Poll the serial console for input. The LAPIC timer calls this because
+ * 9vm's KVM does not deliver the UART's IRQ 4 to an idle (HLTed) vCPU, so
+ * the normal interrupt path never fires while the shell is waiting.
+ */
+void
+consuartpoll(void)
+{
+	if(consuart != nil)
+		i8250interrupt(nil, consuart);
+}
+
 static void
 i8250disable(Uart* uart)
 {

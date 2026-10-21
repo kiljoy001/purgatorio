@@ -8,6 +8,7 @@ int	cistrncmp(char*, char*, int);
 #define	clearmmucache()				/* x86 doesn't have one */
 void	clockintr(Ureg*, void*);
 void	(*coherence)(void);
+void	consuartpoll(void);
 void	cpuid(char*, int*, int*);
 int	cpuidentify(void);
 void	cpuidprint(void);

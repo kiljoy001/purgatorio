@@ -91,6 +91,7 @@ struct Uart
 };
 
 extern Uart*	consuart;
+extern void	consuartpoll(void);
 
 extern int	uartctl(Uart*, char*);
 extern int	uartgetc(void);
