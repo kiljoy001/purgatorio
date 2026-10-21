@@ -63,6 +63,7 @@ misc
 	vgamach64xx
 	cga
 	sdata	pci sdscsi
+	sdvirtio pci
 	apic
 	mp
 	archmp
