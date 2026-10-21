@@ -106,6 +106,7 @@ ready(Proc *p)
 {
 	int s;
 	Schedq *rq;
+	int pri;
 
 	s = splhi();
 /*
@@ -114,7 +115,8 @@ ready(Proc *p)
 		return;
 	}
 */
-	rq = &runq[p->pri];
+	pri = p->pri;
+	rq = &runq[pri];
 	lock(runq);
 	p->rnext = 0;
 	if(rq->tail)
@@ -124,7 +126,7 @@ ready(Proc *p)
 	rq->tail = p;
 
 	nrdy++;
-	occupied |= 1<<p->pri;
+	occupied |= 1<<pri;
 	p->state = Ready;
 	unlock(runq);
 	splx(s);
