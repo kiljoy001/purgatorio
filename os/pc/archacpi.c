@@ -209,6 +209,37 @@ acpiinit(void)
 		ioapicinit(apic, acpiioapicno[i]);
 	}
 
+	/*
+	 * Default ISA interrupt routing: the MADT only overrides the
+	 * non-standard mappings; the legacy IRQs 0-15 default to I/O APIC
+	 * inputs 0-15 (edge-triggered, active-high). Build the bus and
+	 * assignment entries so mpintrenable can route them (e.g. the UART
+	 * on IRQ 4).
+	 */
+	if(nacpiioapic > 0){
+		PCMPbus b;
+		PCMPintr *ip;
+		int n;
+
+		memset(&b, 0, sizeof(b));
+		b.type = PcmpBUS;
+		b.busno = 0;
+		memcpy(b.string, "ISA   ", sizeof(b.string));
+		mkbus(&b);
+
+		for(n = 0; n <= MaxIrqPIC; n++){
+			ip = xalloc(sizeof(PCMPintr));
+			ip->type = PcmpIOINTR;
+			ip->intr = PcmpINT;
+			ip->flags = PcmpEDGE|PcmpHIGH;
+			ip->busno = 0;
+			ip->irq = n;
+			ip->apicno = acpiioapicno[0];
+			ip->intin = n;
+			mkiointr(ip);
+		}
+	}
+
 	/* Local APIC: the boot processor is apic id 0 */
 	memset(&bp, 0, sizeof(bp));
 	bp.type = PcmpPROCESSOR;

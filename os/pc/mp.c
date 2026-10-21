@@ -71,7 +71,7 @@ mkprocessor(PCMPprocessor* p)
 	return apic;
 }
 
-static Bus*
+Bus*
 mkbus(PCMPbus* p)
 {
 	Bus *bus;
@@ -156,7 +156,7 @@ mkioapic(PCMPioapic* p)
 	return apic;
 }
 
-static Aintr*
+Aintr*
 mkiointr(PCMPintr* p)
 {
 	Bus *bus;

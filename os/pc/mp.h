@@ -221,6 +221,8 @@ extern void lapicicrw(int, int);
 extern void mpinit(void);
 extern void mpshutdown(void);
 extern int mpintrenable(Vctl*);
+extern Bus* mkbus(PCMPbus*);
+extern Aintr* mkiointr(PCMPintr*);
 
 extern Apic mpapic[];
 extern int machno2apicno[];

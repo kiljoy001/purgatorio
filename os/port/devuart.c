@@ -640,6 +640,18 @@ uartrecv(Uart *p,  char ch)
 {
 	uchar *next;
 
+	/* serial console: feed the character to the console input queue */
+	if(p->console){
+		if(kbdq == nil){
+			kbdq = qopen(4*1024, 0, 0, 0);
+			if(kbdq == nil)
+				panic("uartrecv: kbdq");
+			qnoblock(kbdq, 1);
+		}
+		kbdputc(kbdq, ch);
+		return;
+	}
+
 	/* software flow control */
 	if(p->xonoff){
 		if(ch == CTLS){
