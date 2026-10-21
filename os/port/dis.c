@@ -850,7 +850,7 @@ acquire(void)
 void
 release(void)
 {
-	Proc *p, **pq;
+	Proc *p;
 	int f;
 
 	if(up->type == Interp){
@@ -863,7 +863,14 @@ release(void)
 	}
 
 	lock(&isched.l);
-	if(*(pq = &isched.vmq) == nil && *(pq = &isched.idlevmq) == nil) {
+	p = isched.vmq;
+	if(p == nil) {
+		/*
+		 * Hand the interpreter only to a proc that has real work (a
+		 * vmq waiter).  Never hand it to an idle spare (idlevmq): the
+		 * spare has no program to run and would iyield it straight back,
+		 * livelocking against a proc that loops on a non-blocking syscall.
+		 */
 		isched.idle = 1;
 		f = isched.creating;
 		isched.creating = 1;
@@ -872,12 +879,13 @@ release(void)
 			kproc("dis", vmachine, nil, 0);
 		return;
 	}
-	p = *pq;
-	*pq = p->qnext;
+	isched.vmq = p->qnext;
 	unlock(&isched.l);
 
 	ready(p);
 }
+
+int iyielded;	/* set by iyield() when it hands the interpreter away */
 
 void
 iyield(void)
@@ -900,21 +908,15 @@ iyield(void)
 		if(!once++)
 			print("tell charles: #%p->type==%d\n", up, up->type);
 	}
-	up->qnext = isched.idlevmq;
-	isched.idlevmq = up;
 
-	up->state = Queueing;
-	up->pc = getcallerpc(&p);
 	unlock(&isched.l);
 	ready(p);
-	sched();
+	iyielded = 1;	/* caller (vmachine) should exit: this spare is gone */
 }
 
-void
+int
 startup(void)
 {
-	int x;
-
 	up->type = Interp;
 	up->iprog = nil;
 
@@ -923,14 +925,10 @@ startup(void)
 	if(isched.idle) {
 		isched.idle = 0;
 		unlock(&isched.l);
-		return;
+		return 1;	/* became the active vmachine */
 	}
-	up->qnext = isched.idlevmq;
-	isched.idlevmq = up;
-	up->state = Queueing;
-	up->pc = getcallerpc(&x);
 	unlock(&isched.l);
-	sched();
+	return 0;	/* interpreter busy: this spawned spare has no work */
 }
 
 void
@@ -1015,7 +1013,8 @@ vmachine(void*)
 	Osenv *o;
 	int cycles;
 
-	startup();
+	if(startup() == 0)
+		return;	/* interpreter busy: this spawned spare has no work */
 
 	while(waserror()) {
 		if(up->type != Interp)
@@ -1037,7 +1036,10 @@ vmachine(void*)
 		}
 
 		if(isched.vmq != nil && (isched.runhd == nil || ++cycles > 2)){
+			iyielded = 0;
 			iyield();
+			if(iyielded)
+				return;	/* handed the interpreter away; exit this spare */
 			cycles = 0;
 		}
 
