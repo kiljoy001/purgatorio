@@ -127,9 +127,9 @@ TEXT tgdtptr(SB), $0
 TEXT mode32bit(SB), $0
 	/* At this point, the GDT setup is done. */
 
-	MOVL	$PADDR(CPU0PDB), DI		/* clear 4 pages for the tables etc. */
+	MOVL	$PADDR(CPU0PDB), DI		/* clear 6 pages for the tables etc. */
 	XORL	AX, AX
-	MOVL	$(4*BY2PG), CX
+	MOVL	$(6*BY2PG), CX
 	SHRL	$2, CX
 
 	CLD
@@ -141,6 +141,9 @@ TEXT mode32bit(SB), $0
 	MOVL	$(PTEWRITE|PTEVALID), BX	/* page permissions */
 	ORL	BX, (AX)
 
+	MOVL	$PADDR(CPU0PTE2), 4(AX)		/* PTE's for 0x80400000 */
+	ORL	BX, 4(AX)
+
 	MOVL	$PADDR(CPU0PTE), AX		/* first page of page table */
 	MOVL	$1024, CX			/* 1024 pages in 4MB */
 _setpte:
@@ -148,6 +151,14 @@ _setpte:
 	ADDL	$(1<<PGSHIFT), BX
 	ADDL	$4, AX
 	LOOP	_setpte
+
+	MOVL	$PADDR(CPU0PTE2), AX		/* second page table (4-8MB) */
+	MOVL	$1024, CX
+_setpte2:
+	MOVL	BX, (AX)
+	ADDL	$(1<<PGSHIFT), BX
+	ADDL	$4, AX
+	LOOP	_setpte2
 
 	MOVL	$PADDR(CPU0PTE), AX
 	ADDL	$PTO(MACHADDR), AX		/* page table entry offset for MACHADDR */

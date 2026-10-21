@@ -36,6 +36,7 @@
 #define	CONFADDR	0x80001200		/* info passed from boot loader */
 #define	CPU0PDB		0x80002000		/* bootstrap processor PDB */
 #define	CPU0PTE		0x80003000		/* bootstrap processor PTE's for 0-4MB */
+#define	CPU0PTE2	0x80007000		/* bootstrap processor PTE's for 4-8MB */
 #define	CPU0GDT		0x80004000		/* bootstrap processor GDT */
 #define	MACHADDR	0x80005000		/* as seen by current processor */
 #define	CPU0MACH	0x80006000		/* Mach for bootstrap processor */
