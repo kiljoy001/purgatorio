@@ -268,6 +268,7 @@ root
 	/dis/disk/format.dis
 	/dis/disk/ftl.dis
 	/dis/disk/kfs.dis
+	/dis/disk/kfs64.dis
 	/dis/disk/kfscmd.dis
 	/dis/disk/mbr.dis
 	/dis/disk/mkext.dis
