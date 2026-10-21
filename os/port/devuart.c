@@ -643,7 +643,7 @@ uartrecv(Uart *p,  char ch)
 	/* serial console: feed the character to the console input queue */
 	if(p->console){
 		if(kbdq == nil){
-			kbdq = qopen(4*1024, 0, 0, 0);
+			kbdq = qopen(4*1024, Qcoalesce, 0, 0);
 			if(kbdq == nil)
 				panic("uartrecv: kbdq");
 			qnoblock(kbdq, 1);

@@ -753,7 +753,7 @@ consinit(void)
 	klogq = qopen(128*1024, 0, 0, 0);
 
 	/* serial-console input queue (no 8042 keyboard under 9vm) */
-	kbdq = qopen(4*1024, 0, 0, 0);
+	kbdq = qopen(4*1024, Qcoalesce, 0, 0);
 	if(kbdq == nil)
 		panic("consinit: kbdq");
 	qnoblock(kbdq, 1);
