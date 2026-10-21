@@ -222,4 +222,7 @@ extern void mpinit(void);
 extern void mpshutdown(void);
 extern int mpintrenable(Vctl*);
 
+extern Apic mpapic[];
+extern int machno2apicno[];
+
 extern _MP_ *_mp_;

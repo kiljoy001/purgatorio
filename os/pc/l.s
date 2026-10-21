@@ -44,11 +44,21 @@ TEXT _multibootheader(SB), $0
 	LONG	$_start0x80100020-KZERO(SB)	/* load_addr */
 	LONG	$edata-KZERO(SB)		/* load_end_addr */
 	LONG	$end-KZERO(SB)			/* bss_end_addr */
-	LONG	$_start0x80100020-KZERO(SB)	/* entry_addr */
+	LONG	$_multibootentry-KZERO(SB)	/* entry_addr */
 	LONG	$0				/* mode_type */
 	LONG	$0				/* width */
 	LONG	$0				/* height */
 	LONG	$0				/* depth */
+
+TEXT _multibootentry(SB), $0
+	MOVL	BX, multibootptr-KZERO(SB)
+	MOVL	$_start0x00100020(SB), AX
+	ANDL	$~KZERO, AX
+	JMP*	AX
+
+/* multiboot structure pointer (physical address) */
+TEXT multibootptr(SB), $0
+	LONG	$0
 
 /*
  * In protected mode with paging turned off and segment registers setup to linear map all memory.

@@ -712,6 +712,7 @@ i8250console(void)
 
 	consuart = uart;
 	uart->console = 1;
+	serwrite = uartputs;	/* serial console: write print output directly */
 }
 
 void

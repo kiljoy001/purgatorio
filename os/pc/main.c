@@ -32,11 +32,43 @@ char *confname[MAXCONF];
 char *confval[MAXCONF];
 int nconf;
 
+extern ulong multibootptr;
+
+static void
+multibootargs(void)
+{
+	ulong *mb;
+	char *cp, *ep, *s;
+
+	if(multibootptr == 0 || multibootptr >= 16*MB)
+		return;
+
+	mb = (ulong*)KADDR(multibootptr);
+	cp = (char*)BOOTARGS;
+	ep = cp + BOOTARGSLEN - 1;
+
+	/* command line */
+	if((mb[0] & (1<<2)) && mb[4] != 0){
+		s = (char*)KADDR(mb[4]);
+		for(; *s && cp < ep-1; s++){
+			if(*s == ' ' || *s == '\t')
+				*cp++ = '\n';
+			else
+				*cp++ = *s;
+		}
+		*cp++ = '\n';
+	}
+
+	*cp = 0;
+}
+
 static void
 options(void)
 {
 	long i, n;
 	char *cp, *line[MAXCONF], *p, *q;
+
+	multibootargs();
 
 	/*
 	 *  parse configuration args from dos file plan9.ini
@@ -90,7 +122,7 @@ main(void)
 	ioinit();
 	i8250console();
 	quotefmtinstall();
-	kbdinit();
+	/* kbdinit(); */	/* no 8042 keyboard controller under 9vm */
 	i8253init();
 	cpuidentify();
 	confinit();
@@ -111,8 +143,8 @@ main(void)
 	timersinit();
 	doc("mathinit");
 	mathinit();
-	doc("kbdenable");
-	kbdenable();
+	/* doc("kbdenable"); */
+	/* kbdenable(); */	/* no 8042 keyboard controller under 9vm */
 	if(arch->clockenable){
 		doc("clockinit");
 		arch->clockenable();

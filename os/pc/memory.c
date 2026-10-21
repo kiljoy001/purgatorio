@@ -266,12 +266,74 @@ umbscan(void)
 }
 
 
+extern ulong multibootptr;
+
+static int
+multibootmem(void)
+{
+	ulong *mb, *mm, l, flags, kend, base, size, type, pa, map;
+	ulong *table, *pte, *va;
+
+	table = nil;
+	if(multibootptr == 0 || multibootptr >= MemMinMB*MB)
+		return -1;
+
+	mb = (ulong*)KADDR(multibootptr);
+	flags = mb[0];
+	if((flags & (1<<6)) == 0)
+		return -1;
+
+	kend = PADDR(PGROUND((ulong)end));
+	mapfree(&rmapram, kend, MemMinMB*MB - kend);
+
+	mm = (ulong*)KADDR(mb[12]);
+	l = mb[11];
+	while(mm[0] >= 20 && mm[0]+4 <= l){
+		mm++;
+		base = mm[0];
+		size = mm[2];
+		type = mm[4] & 0xF;
+		if(type == 1 && size > 0){
+			if(base < MemMinMB*MB){
+				if(base + size <= MemMinMB*MB)
+					goto next;
+				size -= MemMinMB*MB - base;
+				base = MemMinMB*MB;
+			}
+			/* map the RAM, then free it */
+			for(pa = base; pa < base+size; pa += BY2PG){
+				va = KADDR(pa);
+				table = &m->pdb[PDX(va)];
+				if(*table == 0){
+					map = mapalloc(&rmapram, 0, BY2PG, BY2PG);
+					if(map == 0)
+						break;
+					memset(KADDR(map), 0, BY2PG);
+					*table = map|PTEWRITE|PTEVALID;
+				}
+				table = KADDR(PPN(*table));
+				pte = &table[PTX(va)];
+				*pte = pa|PTEWRITE|PTEVALID;
+			}
+			mmuflushtlb(PADDR(m->pdb));
+			mapfree(&rmapram, base, size);
+		}
+	next:
+		l -= mm[-1]+4;
+		mm = (ulong*)((char*)mm + mm[-1]);
+	}
+	return 0;
+}
+
 static void
 ramscan(ulong maxmem)
 {
 	ulong *k0, kzero, map, maxpa, pa, *pte, *table, *va, x, n;
 	int nvalid[NMemType];
 	uchar *bda;
+
+	if(multibootmem() == 0)
+		return;
 
 	/*
 	 * The bootstrap code has has created a prototype page
@@ -453,7 +515,8 @@ meminit(ulong maxmem)
 	}
 	mmuflushtlb(PADDR(m->pdb));
 
-	umbscan();
+	if(multibootptr == 0)
+		umbscan();	/* no UMBs/BIOS ROMs under multiboot; would clobber ACPI tables */
 	ramscan(maxmem);
 
 	/*

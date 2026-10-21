@@ -115,45 +115,30 @@ void
 lapiconline(void)
 {
 	/*
-	 * Reload the timer to de-synchronise the processors,
-	 * then lower the task priority to allow interrupts to be
-	 * accepted by the APIC.
+	 * TSC-deadline mode: arm the first deadline; the interrupt
+	 * handler re-arms it for the periodic tick.
 	 */
 	microdelay((TK2MS(1)*1000/conf.nmach) * m->machno);
-	lapicw(LapicTICR, lapictimer.max);
-	lapicw(LapicTIMER, LapicCLKIN|LapicPERIODIC|(VectorPIC+IrqTIMER));
+	lapicw(LapicTIMER, LapicTMBASE|(VectorPIC+IrqTIMER));
+	wrmsr(0x6E0, tscticks(nil) + lapictimer.max);
 
 	lapicw(LapicTPR, 0);
 }
 
 /*
- *  use the i8253 clock to figure out our lapic timer rate.
+ *  Use the TSC (always running) as the local APIC timer source, since the
+ *  KVM hypervisor (9vm) does not tick the legacy bus-clock based timer.
  */
 static void
 lapictimerinit(void)
 {
-	uvlong x, v, hz;
+	uvlong hz;
 
-	v = m->cpuhz/1000;
-	lapicw(LapicTDCR, LapicX1);
-	lapicw(LapicTIMER, ApicIMASK|LapicCLKIN|LapicONESHOT|(VectorPIC+IrqTIMER));
-
-	if(lapictimer.hz == 0ULL){
-		x = fastticks(&hz);
-		x += hz/10;
-		lapicw(LapicTICR, 0xffffffff);
-		do{
-			v = fastticks(nil);
-		}while(v < x);
-
-		lapictimer.hz = (0xffffffffUL-lapicr(LapicTCCR))*10;
-		lapictimer.max = lapictimer.hz/HZ;
-		lapictimer.min = lapictimer.hz/(100*HZ);
-
-		if(lapictimer.hz > hz)
-			panic("lapic clock faster than cpu clock");
-		lapictimer.div = hz/lapictimer.hz;
-	}
+	fastticks(&hz);			/* PIT frequency, for time conversions */
+	lapictimer.hz = m->cpuhz;	/* TSC frequency */
+	lapictimer.max = lapictimer.hz/HZ;
+	lapictimer.min = lapictimer.hz/(100*HZ);
+	lapictimer.div = m->cpuhz/hz;	/* TSC ticks per PIT tick */
 }
 
 void
@@ -185,13 +170,14 @@ lapicinit(Apic* apic)
 	}
 
 	/*
-	 * Set the local interrupts. It's likely these should just be
-	 * masked off for SMP mode as some Pentium Pros have problems if
-	 * LINT[01] are set to ExtINT.
-	 * Acknowledge any outstanding interrupts.
-	lapicw(LapicLINT0, apic->lintr[0]);
-	lapicw(LapicLINT1, apic->lintr[1]);
+	 * Mask the local interrupts. 9vm's KVM PIT (KVM_CREATE_PIT2) keeps
+	 * delivering IRQ 0 through the legacy PIC to LINT0; if LINT0 is left
+	 * at an unmasked vector 0 the PIT tick shows up as a "divide error"
+	 * (trap 0) the moment init0 lowers spl. Acknowledge any outstanding
+	 * interrupts after masking.
 	 */
+	lapicw(LapicLINT0, ApicIMASK);
+	lapicw(LapicLINT1, ApicIMASK);
 	lapiceoi(0);
 
 	lvt = (lapicr(LapicVER)>>16) & 0xFF;
@@ -358,14 +344,14 @@ lapictimerset(uvlong next)
 	period = lapictimer.max;
 	if(next != 0){
 		period = next - fastticks(nil);
-		period /= lapictimer.div;
+		period *= lapictimer.div;	/* PIT ticks -> TSC ticks */
 
 		if(period < lapictimer.min)
 			period = lapictimer.min;
 		else if(period > lapictimer.max - lapictimer.min)
 			period = lapictimer.max;
 	}
-	lapicw(LapicTICR, period);
+	wrmsr(0x6E0, tscticks(nil) + period);
 
 	unlock(&m->apictimerlock);
 	splx(x);
@@ -375,4 +361,5 @@ void
 lapicclock(Ureg *u, void*)
 {
 	timerintr(u, 0);
+	wrmsr(0x6E0, tscticks(nil) + lapictimer.max);	/* re-arm for periodic tick */
 }

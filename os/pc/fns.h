@@ -148,7 +148,7 @@ void	upareserve(ulong, int);
 void	vectortable(void);
 void*	vmap(ulong, int);
 void	vunmap(void*, int);
-void	wrmsr(ulong, ulong);
+void	wrmsr(ulong, uvlong);
 int	xchgw(ushort*, int);
 ulong	kzeromap(ulong, ulong, int);
 void	nmiscreen(void);

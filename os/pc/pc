@@ -23,6 +23,7 @@ dev
 	audio		dma
 	uart
 	floppy	dma
+	sd
 	tinyfs
 #	mouse # Breaks on Linux/amd64
 	dbg	x86break
@@ -61,6 +62,11 @@ misc
 	vgas3	+cur vgasavage
 	vgamach64xx
 	cga
+	sdata	pci sdscsi
+	apic
+	mp
+	archmp
+	archacpi
 	uarti8250
 
 mod
@@ -71,8 +77,8 @@ mod
 	math
 
 init
-#	shell
-	wminit
+	shell
+#	wminit
 
 code
 	int kernel_pool_pcnt = 10;
@@ -141,3 +147,8 @@ root
 	/dis/lib/ssl.dis
 	/dis/lib/arg.dis
 	/dis/lib/filepat.dis
+	/dis/lib/env.dis
+	/dis/lib/styx.dis
+	/dis/lib/dial.dis
+	/dis/disk
+	/dis/disk/kfs.dis
