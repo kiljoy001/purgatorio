@@ -225,6 +225,8 @@ int		qlen(Queue*);
 void		qlock(QLock*);
 void		qnoblock(Queue*, int);
 Queue*		qopen(int, int, void (*)(void*), void*);
+void		qdump(Queue*);
+void		consdump(void);
 int		qpass(Queue*, Block*);
 int		qpassnolim(Queue*, Block*);
 int		qproduce(Queue*, void*, int);

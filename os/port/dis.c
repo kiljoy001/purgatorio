@@ -1074,6 +1074,50 @@ vmachine(void*)
 	}
 }
 
+static char *progstates[] = {
+	"alt", "send", "recv", "debug", "ready", "release", "exiting", "broken",
+};
+
+static void
+stackscan(Proc *p)
+{
+	ulong *sp, *ep, *q;
+
+	if(p->kstack == nil)
+		return;
+	sp = (ulong*)p->sched.sp;
+	ep = (ulong*)(p->kstack + KSTACK);
+	if(sp < (ulong*)p->kstack || sp >= ep)
+		return;
+	print("  proc %lud %s st=%s stack:", p->pid, p->text, statename[p->state]);
+	for(q = sp; q < ep; q++)
+		if(*q >= 0x80100020UL && *q < 0x80217000UL)
+			print(" %lux", *q);
+	print("\n");
+}
+
+void
+disdump(void)
+{
+	Prog *p;
+	int i;
+
+	print("*** isched runhd=%lux runtл=%lux head=%lux tail=%lux vmq=%lux idle=%d creating=%d nyield=%d\n",
+		(ulong)isched.runhd, (ulong)isched.runtl, (ulong)isched.head,
+		(ulong)isched.tail, (ulong)isched.vmq, isched.idle,
+		isched.creating, isched.nyield);
+	consdump();
+	for(i = 0; i < conf.nproc; i++)
+		stackscan(proctab(i));
+	for(p = isched.head; p != nil; p = p->next)
+		print("prog %d st=%s mod=%s flags=%ux PC=%lux M=%lux FP=%lux SP=%lux ar=%lux\n",
+			p->pid, progstates[p->state],
+			(p->R.M != nil && p->R.M->m != nil && p->R.M->m->name != nil) ? p->R.M->m->name : "?",
+			p->flags,
+			(ulong)p->R.PC, (ulong)p->R.M, (ulong)p->R.FP, (ulong)p->R.SP,
+			(ulong)p->addrun);
+}
+
 void
 disinit(void *a)
 {
@@ -1120,6 +1164,8 @@ disinit(void *a)
 	o->syserrstr = o->errbuf1;
 
 	isched.idle = 1;
+
+	debugkey('D', "dis progs", disdump, 0);
 
 	if(kopen("#c/cons", OREAD) != 0)
 		panic("failed to make fd0 from #c/cons");

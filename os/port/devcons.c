@@ -17,6 +17,7 @@ void	(*serwrite)(char *, int);
 Queue*	kscanq;			/* keyboard raw scancodes (when needed) */
 char*	kscanid;		/* name of raw scan format (if defined) */
 Queue*	kbdq;			/* unprocessed console input */
+int	kbddrops;		/* console input dropped because kbdq full */
 Queue*	lineq;			/* processed console input */
 Queue*	printq;			/* console output */
 Queue*	klogq;			/* kernel print (log) output */
@@ -586,7 +587,8 @@ kbdputc(Queue *q, int ch)
 		return 0;
 	if(!isdbgkey(r)) {
 		echo(r, buf, n);
-		qproduce(q, buf, n);
+		if(qproduce(q, buf, n) < 0 && q == kbdq)
+			kbddrops++;
 	}
 	return 0;
 }
@@ -742,7 +744,14 @@ rexit(Rune)
 	exit(0);
 }
 
-static void
+void
+consdump(void)
+{
+	print("kbddrops=%d kbdq:", kbddrops); qdump(kbdq);
+	print("lineq:"); qdump(lineq);
+}
+
+void
 consinit(void)
 {
 	randominit();
@@ -750,10 +759,18 @@ consinit(void)
 	debugkey('f', "files/6", fddump, 0);
 	debugkey('q', "panic", qpanic, 1);
 	debugkey('r', "exit", rexit, 1);
+	debugkey('K', "console queues", consdump, 0);
 	klogq = qopen(128*1024, 0, 0, 0);
 
-	/* serial-console input queue (no 8042 keyboard under 9vm) */
-	kbdq = qopen(4*1024, Qcoalesce, 0, 0);
+	/*
+	 * Serial-console input queue (no 8042 keyboard under 9vm).
+	 * Qcoalesce still allocates a block per byte for 1-byte rune
+	 * writes (each block carries allocator overhead), so the queue
+	 * limit is an allocation bound, not a data bound: a 4 KiB limit
+	 * only held a couple of hundred bytes of a pasted script.  Use a
+	 * larger limit so a burst of pasted commands is not dropped.
+	 */
+	kbdq = qopen(128*1024, Qcoalesce, 0, 0);
 	if(kbdq == nil)
 		panic("consinit: kbdq");
 	qnoblock(kbdq, 1);
