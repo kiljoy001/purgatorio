@@ -537,7 +537,10 @@ init(nil: ref Draw->Context, args: list of string)
 		d.print("root");
 	d.put();
 
-	sys->pctl(Sys->FORKFD|Sys->NEWPGRP, nil);
+	# give the server its own namespace: if the client mounts this
+	# filesystem at "/", a shared namespace would make the server's own
+	# path lookups resolve through the filesystem it is serving.
+	sys->pctl(Sys->FORKFD|Sys->NEWPGRP|Sys->FORKNS, nil);
 
 	sys->pctl(Sys->NEWFD, wrenfd.fd :: 0 :: 1 :: 2 :: nil);
 	wrenfd = sys->fildes(wrenfd.fd);

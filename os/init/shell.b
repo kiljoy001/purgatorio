@@ -15,7 +15,12 @@ Sh: module
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-init(nil: ref Draw->Context, nil: list of string)
+Mount: module
+{
+	init:	fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
+init(drawcontext: ref Draw->Context, nil: list of string)
 {
 	shell := load Sh "/dis/sh.dis";
 
@@ -23,6 +28,11 @@ init(nil: ref Draw->Context, nil: list of string)
 
 	if(sys != nil)
 		sys->print("init: starting shell\n");
+
+	# Replace the embedded bootstrap root with the persistent kfs64
+	# filesystem on the virtio-blk disk.  If the disk is missing or
+	# blank the mount fails and we stay on the embedded root.
+	rootmount(drawcontext);
 
 #	sys->bind("#I", "/net", sys->MAFTER);	# IP
 	sys->bind("#p", "/prog", sys->MREPL);	# prog device
@@ -37,6 +47,30 @@ init(nil: ref Draw->Context, nil: list of string)
 	srv();
 
 	spawn shell->init(nil, nil);
+}
+
+# Mount the kfs64 on the virtio-blk disk as the root filesystem.
+# Done in the init process so that the shell is created with the new
+# root already in place (and so the device binds below land on it).
+rootmount(ctxt: ref Draw->Context)
+{
+	mount := load Mount "/dis/mount.dis";
+	if(mount == nil){
+		sys->print("init: cannot load mount: %r; using embedded root\n");
+		return;
+	}
+	mounted := 0;
+	{
+		mount->init(ctxt, "mount" :: "-c" :: "{disk/kfs64 '#S/sd00/data'}" :: "/" :: nil);
+		mounted = 1;
+	} exception {
+	"*" =>
+		mounted = 0;
+	}
+	if(mounted)
+		sys->print("init: mounted kfs64 root from #S/sd00/data\n");
+	else
+		sys->print("init: root mount failed; using embedded root\n");
 }
 
 srv()
