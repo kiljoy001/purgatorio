@@ -128,6 +128,13 @@ root
 	/nvfs	/
 	/prog	/
 	/osinit.dis
+	/lib/wmsetup
+	/icons/tk/exit.bit
+	/icons/tk/task.bit
+	/icons/tk/maxf.bit
+	/icons/tk/vitasmall.bit
+	/fonts/misc/latin1.6x13
+	/fonts/misc/latin1.6x13.font
 	/dis/9660srv.dis
 	/dis/9export.dis
 	/dis/9srvfs.dis
