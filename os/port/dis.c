@@ -1128,6 +1128,17 @@ disinit(void *a)
 
 	poperror();
 	vmachine(nil);
+
+	/*
+	 * vmachine() returns when iyield() hands the interpreter to a vmq
+	 * waiter.  For a spare kproc("dis", vmachine) that return is
+	 * harmless (linkproc exits), but this is the bootstrap interpreter
+	 * running in the initial process: returning here would unwind
+	 * through init0() and pop a nil return address off the bottom of
+	 * the kernel stack.  The interpreter has been handed off, so just
+	 * exit this process like any other vmachine.
+	 */
+	pexit("disinit", 0);
 }
 
 void
