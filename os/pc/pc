@@ -69,6 +69,7 @@ misc
 	archmp
 	archacpi
 	uarti8250
+	vmdisp
 
 mod
 	sys

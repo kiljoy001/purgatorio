@@ -37,6 +37,7 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 #	sys->bind("#I", "/net", sys->MAFTER);	# IP
 	sys->bind("#p", "/prog", sys->MREPL);	# prog device
 	sys->bind("#d", "/fd", Sys->MREPL);
+	sys->bind("#s", "/chan", sys->MREPL);	# srv (file2chan)
 	sys->bind("#i", "/dev", sys->MREPL); 	# draw device
 	sys->bind("#t", "/dev", sys->MAFTER);	# serial line
 	sys->bind("#c", "/dev", sys->MAFTER); 	# console device

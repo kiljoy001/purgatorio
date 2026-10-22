@@ -225,6 +225,9 @@ init0(void)
 
 	chandevinit();
 
+	vmdispinit();
+	vmdispstart();
+
 	if(!waserror()){
 		ksetenv("cputype", "386", 0);
 		snprint(buf, sizeof(buf), "386 %s", conffile);

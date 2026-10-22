@@ -9,6 +9,8 @@ int	cistrncmp(char*, char*, int);
 void	clockintr(Ureg*, void*);
 void	(*coherence)(void);
 void	consuartpoll(void);
+void	vmdispinit(void);
+void	vmdispstart(void);
 void	cpuid(char*, int*, int*);
 int	cpuidentify(void);
 void	cpuidprint(void);
