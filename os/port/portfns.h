@@ -196,7 +196,6 @@ int		preemption(int);
 void		printinit(void);
 void		procctl(Proc*);
 void		procdump(void);
-void		mnttimedump(void);
 void		procinit(void);
 Proc*		proctab(int);
 void	(*proctrace)(Proc*, int, vlong); 

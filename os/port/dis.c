@@ -1117,7 +1117,7 @@ stackscan(Proc *p)
 		return;
 	print("  proc %lud %s st=%s stack:", p->pid, p->text, statename[p->state]);
 	for(q = sp; q < ep; q++)
-		if(*q >= 0x80100020UL && *q < 0x80217000UL)
+		if(*q >= KTZERO && *q < (ulong)etext)
 			print(" %lux", *q);
 	print("\n");
 }
@@ -1128,13 +1128,12 @@ disdump(void)
 	Prog *p;
 	int i;
 
-	print("*** isched runhd=%lux runtл=%lux head=%lux tail=%lux vmq=%lux idle=%d creating=%d nyield=%d spawn=%d exit=%d acq=%d rel=%d\n",
+	print("*** isched runhd=%lux runtl=%lux head=%lux tail=%lux vmq=%lux idle=%d creating=%d nyield=%d spawn=%d exit=%d acq=%d rel=%d\n",
 		(ulong)isched.runhd, (ulong)isched.runtl, (ulong)isched.head,
 		(ulong)isched.tail, (ulong)isched.vmq, isched.idle,
 		isched.creating, isched.nyield, isched.nspawn, isched.nexit,
 		isched.nacquire, isched.nrelease);
 	consdump();
-	mnttimedump();
 	for(i = 0; i < conf.nproc; i++)
 		stackscan(proctab(i));
 	for(p = isched.head; p != nil; p = p->next)
