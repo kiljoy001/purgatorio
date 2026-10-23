@@ -79,6 +79,35 @@ char Enoversion[] = "version not established for mount channel";
 
 void (*mntstats)(int, Chan*, uvlong, ulong);
 
+/* temporary RPC latency instrumentation */
+static Lock mntstatl;
+static uvlong mntwr, mntrd, mnthz;
+static ulong mntn;
+
+void
+mnttimedump(void)
+{
+	uvlong hz = mnthz ? mnthz : 1;
+	ulong n = mntn ? mntn : 1;
+
+	print("mnt rpc n=%lud hz=%llud avg wr=%lludus rd=%lludus tot=%lludus\n",
+		mntn, mnthz,
+		mntwr*1000000/(hz*n), mntrd*1000000/(hz*n),
+		(mntwr+mntrd)*1000000/(hz*n));
+	mntwr = mntrd = 0;
+	mntn = 0;
+}
+
+static void
+mntstatadd(uvlong w, uvlong r)
+{
+	lock(&mntstatl);
+	mntwr += w;
+	mntrd += r;
+	mntn++;
+	unlock(&mntstatl);
+}
+
 static void
 mntreset(void)
 {
@@ -793,12 +822,14 @@ mountio(Mnt *m, Mntrpc *r)
 	/* Transmit a file system rpc */
 	if(m->msize == 0)
 		panic("msize");
+	uvlong t0, tw, tr;
+	t0 = fastticks(&mnthz);
 	n = convS2M(&r->request, r->rpc, m->msize);
 	if(n < 0)
 		panic("bad message type in mountio");
 	if(devtab[m->c->type]->write(m->c, r->rpc, n, 0) != n)
 		error(Emountrpc);
-/*	r->stime = fastticks(nil); */
+	tw = fastticks(nil);
 	r->reqlen = n;
 
 	/* Gate readers onto the mount point one at a time */
@@ -821,6 +852,8 @@ mountio(Mnt *m, Mntrpc *r)
 			error(Emountrpc);
 		mountmux(m, r);
 	}
+	tr = fastticks(nil);
+	mntstatadd(tw - t0, tr - tw);
 	mntgate(m);
 	poperror();
 	mntflushfree(m, r);

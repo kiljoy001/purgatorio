@@ -22,6 +22,10 @@ struct
 	int	idle;
 	int	nyield;
 	int	creating;
+	int	nspawn;
+	int	nexit;
+	int	nacquire;
+	int	nrelease;
 	Proc*	vmq;		/* queue of procs wanting vm */
 	Proc*	vmqt;
 	Proc*	idlevmq;	/* queue of procs wanting work */
@@ -808,6 +812,8 @@ acquire(void)
 	int empty;
 	Prog *p;
 
+	isched.nacquire++;
+
 	lock(&isched.l);
 	if(isched.idle) {
 		isched.idle = 0;
@@ -853,6 +859,8 @@ release(void)
 	Proc *p;
 	int f;
 
+	isched.nrelease++;
+
 	if(up->type == Interp){
 		if(up->iprog != nil)
 			panic("Double release (Interp)?");
@@ -872,11 +880,25 @@ release(void)
 		 * livelocking against a proc that loops on a non-blocking syscall.
 		 */
 		isched.idle = 1;
+		if(isched.runhd == nil){
+			/*
+			 * No Dis program is runnable.  The token can simply stay
+			 * idle: whoever next calls acquire() (this proc when its
+			 * syscall returns, or a proc woken from a blocking call)
+			 * takes it directly.  Spawning a vmachine here would only
+			 * create a process that immediately exits again -- which
+			 * is what made every non-blocking syscall expensive.
+			 */
+			unlock(&isched.l);
+			return;
+		}
 		f = isched.creating;
 		isched.creating = 1;
 		unlock(&isched.l);
-		if(f == 0)
+		if(f == 0){
+			isched.nspawn++;
 			kproc("dis", vmachine, nil, 0);
+		}
 		return;
 	}
 	isched.vmq = p->qnext;
@@ -1013,8 +1035,10 @@ vmachine(void*)
 	Osenv *o;
 	int cycles;
 
-	if(startup() == 0)
+	if(startup() == 0){
+		isched.nexit++;
 		return;	/* interpreter busy: this spawned spare has no work */
+	}
 
 	while(waserror()) {
 		if(up->type != Interp)
@@ -1038,8 +1062,10 @@ vmachine(void*)
 		if(isched.vmq != nil && (isched.runhd == nil || ++cycles > 2)){
 			iyielded = 0;
 			iyield();
-			if(iyielded)
+			if(iyielded){
+				isched.nexit++;
 				return;	/* handed the interpreter away; exit this spare */
+			}
 			cycles = 0;
 		}
 
@@ -1102,11 +1128,13 @@ disdump(void)
 	Prog *p;
 	int i;
 
-	print("*** isched runhd=%lux runtл=%lux head=%lux tail=%lux vmq=%lux idle=%d creating=%d nyield=%d\n",
+	print("*** isched runhd=%lux runtл=%lux head=%lux tail=%lux vmq=%lux idle=%d creating=%d nyield=%d spawn=%d exit=%d acq=%d rel=%d\n",
 		(ulong)isched.runhd, (ulong)isched.runtl, (ulong)isched.head,
 		(ulong)isched.tail, (ulong)isched.vmq, isched.idle,
-		isched.creating, isched.nyield);
+		isched.creating, isched.nyield, isched.nspawn, isched.nexit,
+		isched.nacquire, isched.nrelease);
 	consdump();
+	mnttimedump();
 	for(i = 0; i < conf.nproc; i++)
 		stackscan(proctab(i));
 	for(p = isched.head; p != nil; p = p->next)
