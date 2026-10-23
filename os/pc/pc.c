@@ -10,7 +10,7 @@
 
 #include "pc.root.h"
 
-ulong ndevs = 31;
+ulong ndevs = 32;
 extern Dev rootdevtab;
 extern Dev consdevtab;
 extern Dev archdevtab;
@@ -34,7 +34,8 @@ extern Dev floppydevtab;
 extern Dev sddevtab;
 extern Dev tinyfsdevtab;
 extern Dev dbgdevtab;
-Dev* devtab[31]={
+extern Dev hostringdevtab;
+Dev* devtab[32]={
 	&rootdevtab,
 	&consdevtab,
 	&archdevtab,
@@ -58,6 +59,7 @@ Dev* devtab[31]={
 	&sddevtab,
 	&tinyfsdevtab,
 	&dbgdevtab,
+	&hostringdevtab,
 	nil,
 };
 

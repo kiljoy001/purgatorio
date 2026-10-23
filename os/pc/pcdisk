@@ -11,6 +11,7 @@ dev
 	dup
 	ssl
 	cap
+	hostring
 
 	ip	bootp ip ipv6 ipaux iproute arp netlog ptclbsum386 iprouter plan9 nullmedium pktmedium
 	ether		netif netaux ethermedium

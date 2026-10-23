@@ -11,6 +11,7 @@ dev
 	dup
 	ssl
 	cap
+	hostring
 
 	draw	screen vga vgax cga
 	pointer

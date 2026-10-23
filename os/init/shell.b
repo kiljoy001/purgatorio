@@ -34,6 +34,10 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 	# blank the mount fails and we stay on the embedded root.
 	rootmount(drawcontext);
 
+	# The 9vm host shares its filesystem over a 9P ring (#~/host).
+	# Best effort: kernels without the ring simply keep going.
+	hostmount(drawcontext);
+
 #	sys->bind("#I", "/net", sys->MAFTER);	# IP
 	sys->bind("#p", "/prog", sys->MREPL);	# prog device
 	sys->bind("#d", "/fd", Sys->MREPL);
@@ -72,6 +76,33 @@ rootmount(ctxt: ref Draw->Context)
 		sys->print("init: mounted kfs64 root from #S/sd00/data\n");
 	else
 		sys->print("init: root mount failed; using embedded root\n");
+}
+
+# Mount the 9vm host filesystem served on the shared 9P ring at /n/host.
+hostmount(ctxt: ref Draw->Context)
+{
+	mount := load Mount "/dis/mount.dis";
+	fd: ref Sys->FD;
+
+	if(mount == nil){
+		sys->print("init: cannot load mount: %r\n");
+		return;
+	}
+	fd = sys->open("#~/host", Sys->ORDWR);
+	if(fd == nil){
+		sys->print("init: no 9ring host transport: %r\n");
+		return;
+	}
+	fd = nil;
+	if(sys->create("/n/host", Sys->OREAD, Sys->DMDIR|8r777) == nil)
+		;	# already there
+	{
+		mount->init(ctxt, "mount" :: "-A" :: "#~/host" :: "/n/host" :: nil);
+		sys->print("init: mounted 9ring host at /n/host\n");
+	} exception {
+	"*" =>
+		sys->print("init: 9ring host mount failed: %r\n");
+	}
 }
 
 srv()
