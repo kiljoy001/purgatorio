@@ -50,6 +50,7 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 #	sys->bind("#O", "/dev", sys->MAFTER);	# Modem
 #	sys->bind("#T","/dev",sys->MAFTER);	# Touchscreen
 
+	netstart();
 	srv();
 
 	spawn shell->init(nil, nil);
@@ -104,6 +105,72 @@ hostmount(ctxt: ref Draw->Context)
 	"*" =>
 		sys->print("init: 9ring host mount failed: %r\n");
 	}
+}
+
+# Optional per-VM network and payload configuration:
+#   ip=10.0.0.2
+#   mask=255.255.255.0
+#   cmd=listen -A tcp!*!5750 {/n/host/payload.dis 0}
+# The file is served by 9vm at /n/host/net.conf.
+netstart()
+{
+	fd: ref Sys->FD;
+	buf: array of byte;
+	n: int;
+	ip, mask, cmd: string;
+	nlines: int;
+	lines: list of string;
+
+	fd = sys->open("/n/host/net.conf", Sys->OREAD);
+	if(fd == nil)
+		return;
+	buf = array[4096] of byte;
+	n = sys->read(fd, buf, len buf);
+	fd = nil;
+	if(n <= 0)
+		return;
+	(nlines, lines) = sys->tokenize(string buf[0:n], "\n");
+	while(lines != nil){
+		line := hd lines;
+		lines = tl lines;
+		(key, val) := split(line);
+		case key {
+		"ip" =>
+			ip = val;
+		"mask" =>
+			mask = val;
+		"cmd" =>
+			cmd = val;
+		}
+	}
+	if(ip == nil || mask == nil)
+		return;
+	cfd := sys->open("/net/ipifc/clone", Sys->ORDWR);
+	if(cfd == nil){
+		sys->print("net: open /net/ipifc/clone: %r\n");
+		return;
+	}
+	if(sys->fprint(cfd, "bind ether ether0") < 0)
+		sys->print("net: bind ether0: %r\n");
+	if(sys->fprint(cfd, "add %s %s", ip, mask) < 0)
+		sys->print("net: add %s: %r\n", ip);
+	else
+		sys->print("net: %s %s\n", ip, mask);
+	if(cmd != nil){
+		sh := load Sh "/dis/sh.dis";
+		if(sh == nil)
+			sys->print("net: cannot load shell: %r\n");
+		else
+			spawn sh->init(nil, "sh" :: "-c" :: cmd :: nil);
+	}
+}
+
+split(s: string): (string, string)
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '=')
+			return (s[0:i], s[i+1:]);
+	return (s, nil);
 }
 
 srv()
