@@ -38,7 +38,8 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 	# Best effort: kernels without the ring simply keep going.
 	hostmount(drawcontext);
 
-#	sys->bind("#I", "/net", sys->MAFTER);	# IP
+	sys->bind("#l", "/net", sys->MAFTER);	# ethernet
+	sys->bind("#I", "/net", sys->MAFTER);	# IP
 	sys->bind("#p", "/prog", sys->MREPL);	# prog device
 	sys->bind("#d", "/fd", Sys->MREPL);
 	sys->bind("#s", "/chan", sys->MREPL);	# srv (file2chan)

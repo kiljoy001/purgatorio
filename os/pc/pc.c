@@ -23,6 +23,7 @@ extern Dev srvdevtab;
 extern Dev dupdevtab;
 extern Dev ssldevtab;
 extern Dev capdevtab;
+extern Dev hostringdevtab;
 extern Dev drawdevtab;
 extern Dev pointerdevtab;
 extern Dev vgadevtab;
@@ -34,7 +35,6 @@ extern Dev floppydevtab;
 extern Dev sddevtab;
 extern Dev tinyfsdevtab;
 extern Dev dbgdevtab;
-extern Dev hostringdevtab;
 Dev* devtab[32]={
 	&rootdevtab,
 	&consdevtab,
@@ -48,6 +48,7 @@ Dev* devtab[32]={
 	&dupdevtab,
 	&ssldevtab,
 	&capdevtab,
+	&hostringdevtab,
 	&drawdevtab,
 	&pointerdevtab,
 	&vgadevtab,
@@ -59,11 +60,11 @@ Dev* devtab[32]={
 	&sddevtab,
 	&tinyfsdevtab,
 	&dbgdevtab,
-	&hostringdevtab,
 	nil,
 };
 
 extern void ether79c970link(void);
+extern void ethervirtiolink(void);
 extern void ether2114xlink(void);
 extern void ether82557link(void);
 extern void ether83815link(void);
@@ -72,6 +73,7 @@ extern void ps2mouselink(void);
 extern void ethermediumlink(void);
 void links(void){
 	ether79c970link();
+	ethervirtiolink();
 	ether2114xlink();
 	ether82557link();
 	ether83815link();

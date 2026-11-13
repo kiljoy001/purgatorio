@@ -51,6 +51,7 @@ lib
 
 link
 	ether79c970	pci
+	ethervirtio	pci
 	ether2114x	pci
 	ether82557	pci
 	ether83815	pci
