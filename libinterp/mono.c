@@ -162,6 +162,23 @@ Mono_x25519(void *fp)
 }
 
 void
+Mono_xpublic(void *fp)
+{
+	F_Mono_xpublic *f;
+	uchar *sk, out[32];
+	int skn;
+
+	f = fp;
+	sk = abytes(f->sk, &skn);
+	if(skn != 32){
+		badargs(f->ret, nil, "mono: x25519 needs a 32-byte key");
+		return;
+	}
+	crypto_x25519_public_key(out, sk);
+	setarr(f->ret, out, 32);
+}
+
+void
 Mono_edkeypair(void *fp)
 {
 	F_Mono_edkeypair *f;

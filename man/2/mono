@@ -11,6 +11,7 @@ aeadlock:   fn(key, nonce, ad, plain: array of byte):
 aeadunlock: fn(key, nonce, tag, ad, cipher: array of byte): array of byte;
 blake2b:    fn(msg, key: array of byte, n: int): array of byte;
 x25519:     fn(sk, pk: array of byte): array of byte;
+xpublic:    fn(sk: array of byte): array of byte;
 edkeypair:  fn(seed: array of byte): (array of byte, array of byte);
 edsign:     fn(sk, msg: array of byte): array of byte;
 edcheck:    fn(sig, pk, msg: array of byte): int;
@@ -61,6 +62,11 @@ multiplies the 32-byte scalar
 .I sk
 by the 32-byte point
 .IR pk .
+.B xpublic
+returns the public key for
+.I sk
+(the base point is built into the library; do not construct one by
+hand, because a fresh Limbo array is not guaranteed to be zeroed).
 .PP
 .B edkeypair
 takes a 32-byte

@@ -22,6 +22,7 @@ Mono: module
 
 	# X25519 scalar multiplication; both keys are 32 bytes.
 	x25519:		fn(sk: array of byte, pk: array of byte): array of byte;
+	xpublic:	fn(sk: array of byte): array of byte;
 
 	# EdDSA (BLAKE2b variant).  The secret key is 64 bytes, a seed
 	# is 32 and the signature 64.
