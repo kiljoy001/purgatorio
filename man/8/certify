@@ -3,6 +3,9 @@
 certify \- create and inspect authentication certificates
 .SH SYNOPSIS
 .B certify
+[
+.B \-f
+]
 .B init
 [
 .I owner
@@ -60,9 +63,17 @@ to
 by default
 .BR /usr/\fIname\fP/keyring/default ,
 creating the directory if necessary.
-The certificate contains a secret key derived from the signer's public
-key and the user name, so the same command always produces the same
-certificate for the same machine and name.
+Each run generates a fresh RSA key pair; the certificate signs its
+public half.  Running
+.B certify user
+again therefore makes a
+.I different
+certificate, and the one it replaces stays valid, because there is no
+revocation: see
+.SM BUGS .
+.PP
+.B \-f
+allows an existing certificate to be replaced.
 .PP
 Give the file to the user; it is what
 .I listen
@@ -90,6 +101,50 @@ machine to machine.
 prints the signer key and every
 .B /usr/*/keyring/default
 it can find.
+.SH SECURITY
+The protocol is mutual: each side sends a certificate and proves
+possession of the matching secret key, and the user name is part of the
+signed public key, so a certificate cannot be relabelled.  That much was
+verified.
+.PP
+What it is not:
+.IP \(bu
+A certificate is a
+.I bearer token.
+Its file also holds the private key.  Anyone who can read it can act as
+that user.
+.IP \(bu
+One signer key per machine, never expiring, with no revocation list.
+Replacing
+.B /keydb/signerkey
+invalidates every certificate; replacing one user's certificate does
+not invalidate the one that user already has.
+.IP \(bu
+There are no real user identifiers inside an Inferno instance.
+.B runas
+writes
+.BR /dev/user ,
+and any process can write it.  Every process on the machine can also
+read
+.B /keydb/signerkey
+and every certificate.  Treat the user name as accounting, not as a
+security boundary; the boundary is the
+.I cpud
+allowlist.
+.IP \(bu
+.B \-a rc4_128
+uses Inferno's SSL device, which is the SSLv2-era record layer with RC4
+and MD5.  It stops casual sniffing on a LAN; it is not modern
+confidentiality.  With
+.B \-a none
+the session is authenticated but completely in the clear, including the
+certificate exchange.
+.IP \(bu
+The machine key created by
+.B firstboot
+is written into the root file system.  Clone an image
+.I before
+first boot, or every clone shares one signer key.
 .SH EXAMPLES
 Create the machine key and a certificate for the console user:
 .IP
@@ -140,26 +195,13 @@ user certificate
 .IR cpu (1),
 .IR cpud (8),
 .IR keyring-auth (2),
-.IR createsignerkey (8),
-.IR mkauthinfo (8)
+.IR createsignerkey (8)
 .SH BUGS
-One signer key per machine, and it never expires.  There is no
-revocation list: to withdraw a user, remove the certificate file, and
-to withdraw everyone, replace
+To withdraw a user, delete the certificate file; that only helps if the
+user has not kept a copy.  To withdraw everyone, replace
 .B /keydb/signerkey
-and reissue.
+and reissue every certificate.  Nothing expires on its own.
 .PP
-A certificate is a bearer token.  Anyone who can read it can act as
-that user, and anyone who can read
-.B /keydb/signerkey
-can mint a certificate for any name.
-.PP
-Within a single Inferno instance, identity is advisory:
-.B runas
-sets
-.B /dev/user
-but does not confine the process.  The boundary that matters is what
-.I cpud
-agrees to run
-.RB ( cpud (8)),
-not the user name it reports.
+See
+.SM SECURITY
+for what the mechanism does not provide.

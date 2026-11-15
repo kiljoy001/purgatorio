@@ -65,7 +65,16 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	if(arg == nil)
 		fatal("cannot load " + Arg->PATH);
 	arg->init(argv);
-	arg->setusage("certify init [owner] | user name [file] | firstboot | show");
+	arg->setusage("certify [-f] init [owner] | user name [file] | firstboot | show");
+	force := 0;
+	while((o := arg->opt()) != 0){
+		case o {
+		'f' =>
+			force = 1;
+		* =>
+			arg->usage();
+		}
+	}
 	argv = arg->argv();
 	if(argv == nil)
 		usage();
@@ -88,10 +97,10 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 		file := "";
 		if(tl rest != nil)
 			file = hd tl rest;
-		if(user_cert(name, file) < 0)
+		if(user_cert(name, file, force) < 0)
 			raise "fail:user";
 	"firstboot" =>
-		firstboot();
+		firstboot(force);
 	"show" =>
 		show();
 	* =>
@@ -131,7 +140,7 @@ init_signer(owner: string): int
 	return 0;
 }
 
-user_cert(name, file: string): int
+user_cert(name, file: string, force: int): int
 {
 	if(name == nil || name == ""){
 		sys->fprint(stderr, "certify: no user name\n");
@@ -139,6 +148,11 @@ user_cert(name, file: string): int
 	}
 	if(file == nil || file == "")
 		file = "/usr/" + name + KEYDIR + "/default";
+	if(statok(file) && !force){
+		sys->fprint(stderr, "certify: %s exists; use -f to replace it\n", file);
+		sys->fprint(stderr, "certify: the old certificate stays valid until %s is replaced\n", SIGNER);
+		return -1;
+	}
 
 	sai := auth->key("key=" + SIGNER);
 	if(sai == nil){
@@ -171,7 +185,7 @@ user_cert(name, file: string): int
 # First boot: make the box usable without an operator.  A key that is
 # generated here is local to this machine, so certificates are not
 # shared between hosts; that is the point.
-firstboot()
+firstboot(force: int)
 {
 	if(!statok(SIGNER))
 		if(init_signer("signer") < 0)
@@ -180,7 +194,7 @@ firstboot()
 	if(user == "")
 		user = "inferno";
 	if(!statok("/usr/" + user + KEYDIR + "/default"))
-		user_cert(user, "");
+		user_cert(user, "", force);
 }
 
 show()
