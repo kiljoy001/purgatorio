@@ -36,6 +36,9 @@ include "draw.m";
 include "mono.m";
 	mono: Mono;
 
+include "dial.m";
+	dial: Dial;
+
 include "monoauth.m";
 
 SIGNER:		con "/keydb/mono-signer";
@@ -54,75 +57,19 @@ Id: adt
 
 server(keyfile: string, fd: ref Sys->FD): (ref Sys->FD, string)
 {
-	return run(keyfile, fd, 1);
+	(l, err) := link(keyfile, fd, 1);
+	if(l == nil)
+		return (nil, err);
+	(nil, sfd) := linkaccept(l);
+	return (sfd, l.name);
 }
 
 client(keyfile: string, fd: ref Sys->FD): (ref Sys->FD, string)
 {
-	return run(keyfile, fd, 0);
-}
-
-run(keyfile: string, fd: ref Sys->FD, isserver: int): (ref Sys->FD, string)
-{
-	sys = load Sys Sys->PATH;
-	mono = load Mono Mono->PATH;
-	if(mono == nil)
-		return (nil, "cannot load " + Mono->PATH);
-
-	(me, err) := loadid(keyfile);
-	if(me == nil)
+	(l, err) := link(keyfile, fd, 0);
+	if(l == nil)
 		return (nil, err);
-	(signer, serr) := loadsigner();
-	if(signer == nil)
-		return (nil, serr);
-
-	# Ephemeral X25519 key: random scalar, public key from the library.
-	ephx := readrandom(32);
-	if(ephx == nil)
-		return (nil, "cannot read /dev/random");
-	ephpk := mono->xpublic(ephx);
-	if(ephpk == nil)
-		return (nil, "ephemeral key generation failed");
-
-	if(writeall(fd, me, ephpk) < 0)
-		return (nil, sys->sprint("handshake write: %r"));
-	(peer, peereph, perr) := readpeer(fd);
-	if(peer == nil)
-		return (nil, perr);
-
-	if(!verify(peer, signer))
-		return (nil, "peer certificate does not verify");
-
-	# readpeer returns slices of the message buffer; copy before use.
-	pr := array[32] of byte;
-	for(i := 0; i < 32; i++)
-		pr[i] = peereph[i];
-	shared := mono->x25519(ephx, pr);
-	if(shared == nil)
-		return (nil, "x25519 failed");
-
-	cname: string;
-	cpk, ceph: array of byte;
-	cname = me.name;
-	cpk = me.pk;
-	ceph = ephpk;
-	sname := peer.name;
-	spk := peer.pk;
-	seph := peereph;
-	if(isserver){
-		cname = peer.name;
-		cpk = peer.pk;
-		ceph = peereph;
-		sname = me.name;
-		spk = me.pk;
-		seph = ephpk;
-	}
-	(ksend, krecv) := keypair(cname, cpk, ceph, sname, spk, seph, shared, isserver);
-
-	(plainfd, merr) := mkchannel(fd, ksend, krecv);
-	if(plainfd == nil)
-		return (nil, merr);
-	return (plainfd, peer.name);
+	return (linkopen(l, 1), l.name);
 }
 
 # ---- handshake -------------------------------------------------------
@@ -196,9 +143,27 @@ nonce(ctr: int): array of byte
 	return n;
 }
 
-cryptwrite(fd: ref Sys->FD, key: array of byte, ctr: int, plain: array of byte): int
+OPEN:	con 1;
+DATA:	con 2;
+FIN:	con 3;
+
+# A record's plaintext is: session(4) | type(1) | data.
+frame(sess, typ: int, data: array of byte): array of byte
 {
-	(ct, tag) := mono->aeadlock(key, nonce(ctr), nil, plain);
+	f := array[5 + len data] of byte;
+	f[0] = byte (sess >> 24);
+	f[1] = byte (sess >> 16);
+	f[2] = byte (sess >> 8);
+	f[3] = byte sess;
+	f[4] = byte typ;
+	for(i := 0; i < len data; i++)
+		f[5+i] = data[i];
+	return f;
+}
+
+cryptwrite(fd: ref Sys->FD, key: array of byte, ctr: int, sess, typ: int, data: array of byte): int
+{
+	(ct, tag) := mono->aeadlock(key, nonce(ctr), nil, frame(sess, typ, data));
 	if(ct == nil)
 		return -1;
 	hdr := array[4] of byte;
@@ -211,144 +176,237 @@ cryptwrite(fd: ref Sys->FD, key: array of byte, ctr: int, plain: array of byte):
 	return 0;
 }
 
-cryptread(fd: ref Sys->FD, key: array of byte, ctr: int): array of byte
+cryptread(fd: ref Sys->FD, key: array of byte, ctr: int): (int, int, array of byte)
 {
 	hdr := array[4] of byte;
 	if(allread(fd, hdr) < 0)
-		return nil;
+		return (0, 0, nil);
 	n := (int hdr[0] << 24) | (int hdr[1] << 16) | (int hdr[2] << 8) | int hdr[3];
-	if(n < 0 || n > MAXREC)
-		return nil;
+	if(n < 5 || n > MAXREC)
+		return (0, 0, nil);
 	tag := array[16] of byte;
 	if(allread(fd, tag) < 0)
-		return nil;
+		return (0, 0, nil);
 	ct := array[n] of byte;
-	if(n > 0 && allread(fd, ct) < 0)
-		return nil;
-	return mono->aeadunlock(key, nonce(ctr), tag, nil, ct);
+	if(allread(fd, ct) < 0)
+		return (0, 0, nil);
+	pt := mono->aeadunlock(key, nonce(ctr), tag, nil, ct);
+	if(pt == nil || len pt < 5)
+		return (0, 0, nil);
+	sess := (int pt[0] << 24) | (int pt[1] << 16) | (int pt[2] << 8) | int pt[3];
+	return (sess, int pt[4], pt[5:]);
 }
 
 # ---- plaintext side --------------------------------------------------
 
-mkchannel(net: ref Sys->FD, ksend, krecv: array of byte): (ref Sys->FD, string)
+# link authenticates and returns a multiplexed connection.  Each frame
+# carries a session tag; OPEN creates a session, DATA carries bytes and
+# FIN closes it.  One writer proc serialises frames so tags cannot
+# interleave inside a record.
+link(keyfile: string, fd: ref Sys->FD, isserver: int): (ref Link, string)
 {
-	if(sys->create("/tmp", Sys->OREAD, Sys->DMDIR|8r777) == nil)
-		;	# already there
-	if(sys->create(CHANDIR, Sys->OREAD, Sys->DMDIR|8r777) == nil && !statok(CHANDIR))
-		return (nil, "cannot create " + CHANDIR);
-	# file2chan needs a srv(3) directory, not a disk directory.
-	if(sys->bind("#s", CHANDIR, Sys->MREPL) < 0)
-		return (nil, "cannot bind #s on " + CHANDIR + ": " + sys->sprint("%r"));
+	sys = load Sys Sys->PATH;
+	mono = load Mono Mono->PATH;
+	if(mono == nil)
+		return (nil, "cannot load " + Mono->PATH);
+	dial = load Dial Dial->PATH;
+	if(dial == nil)
+		return (nil, "cannot load " + Dial->PATH);
 
-	name := string sys->pctl(0, nil) + "." + string counter++;
-	io := sys->file2chan(CHANDIR, name);
-	if(io == nil)
-		return (nil, "file2chan " + CHANDIR + ": " + sys->sprint("%r"));
-	fd := sys->open(CHANDIR + "/" + name, Sys->ORDWR);
-	if(fd == nil)
-		return (nil, "open channel: " + sys->sprint("%r"));
+	(me, err) := loadid(keyfile);
+	if(me == nil)
+		return (nil, err);
+	(signer, serr) := loadsigner();
+	if(signer == nil)
+		return (nil, serr);
 
-	(inr, inw) := mkpipe();
-	(outr, outw) := mkpipe();
-	if(inr == nil || outr == nil)
-		return (nil, "pipe failed");
+	ephx := readrandom(32);
+	if(ephx == nil)
+		return (nil, "cannot read /dev/random");
+	ephpk := mono->xpublic(ephx);
+	if(ephpk == nil)
+		return (nil, "ephemeral key generation failed");
+	if(writeall(fd, me, ephpk) < 0)
+		return (nil, sys->sprint("handshake write: %r"));
+	(peer, peereph, perr) := readpeer(fd);
+	if(peer == nil)
+		return (nil, perr);
+	if(!verify(peer, signer))
+		return (nil, "peer certificate does not verify");
+	pr := array[32] of byte;
+	for(i := 0; i < 32; i++)
+		pr[i] = peereph[i];
+	shared := mono->x25519(ephx, pr);
+	if(shared == nil)
+		return (nil, "x25519 failed");
 
-	done := chan[2] of int;
-	spawn pumpin(net, inw, krecv, done);
-	spawn pumpout(net, outr, ksend, done);
-	spawn servecrypt(io, inr, outw);
-	spawn reap(CHANDIR + "/" + name, done);
-	return (fd, nil);
+	cname: string;
+	cpk, ceph: array of byte;
+	cname = me.name;
+	cpk = me.pk;
+	ceph = ephpk;
+	sname := peer.name;
+	spk := peer.pk;
+	seph := peereph;
+	if(isserver){
+		cname = peer.name;
+		cpk = peer.pk;
+		ceph = peereph;
+		sname = me.name;
+		spk = me.pk;
+		seph = ephpk;
+	}
+	(ksend, krecv) := keypair(cname, cpk, ceph, sname, spk, seph, shared, isserver);
+
+	l := ref Link;
+	l.name = peer.name;
+	l.net = fd;
+	l.send = chan[64] of (int, int, array of byte);
+	l.news = chan[16] of (int, ref Sys->FD);
+	l.sessions = nil;
+	spawn linkwrite(l, ksend);
+	spawn linkread(l, krecv);
+	return (l, nil);
 }
 
-# net -> plaintext pipe
-pumpin(net: ref Sys->FD, w: ref Sys->FD, key: array of byte, done: chan of int)
+linkaccept(l: ref Link): (int, ref Sys->FD)
 {
-    {
+	(tag, fd) := <-l.news;
+	return (tag, fd);
+}
+
+linkopen(l: ref Link, tag: int): ref Sys->FD
+{
+	(s, cli) := mksession(l, tag);
+	l.sessions = s :: l.sessions;
+	l.send <-= (tag, OPEN, array[0] of byte);
+	return cli;
+}
+
+linkwrite(l: ref Link, key: array of byte)
+{
 	ctr := 0;
 	for(;;){
-		pt := cryptread(net, key, ctr);
-		if(pt == nil)
+		(tag, typ, data) := <-l.send;
+		if(cryptwrite(l.net, key, ctr, tag, typ, data) < 0)
 			break;
 		ctr++;
-		if(sys->write(w, pt, len pt) < 0)
-			break;
 	}
-	w = nil;
-	done <-= 1;
-    } exception e {
-    "*" => sys->print("monoauth: pumpin failed: %s\n", e);
-    }
 }
 
-# plaintext pipe -> net
-pumpout(net: ref Sys->FD, r: ref Sys->FD, key: array of byte, done: chan of int)
+linkread(l: ref Link, key: array of byte)
+{
+	ctr := 0;
+	for(;;){
+		(tag, typ, data) := cryptread(l.net, key, ctr);
+		if(typ != OPEN && typ != DATA && typ != FIN)
+			break;
+		ctr++;
+		case typ {
+		OPEN =>
+			(s, cli) := mksession(l, tag);
+			l.sessions = s :: l.sessions;
+			l.news <-= (tag, cli);
+		DATA =>
+			s := find(l, tag);
+			if(s != nil && s.fd != nil)
+				sys->write(s.fd, data, len data);
+		FIN =>
+			s := find(l, tag);
+			if(s != nil){
+				s.fd = nil;
+				l.sessions = remove(l.sessions, s);
+			}
+		}
+	}
+}
+
+mksession(l: ref Link, tag: int): (ref Sess, ref Sys->FD)
+{
+	(c, cli) := socketpair();
+	if(c == nil)
+		return (nil, nil);
+	s := ref Sess;
+	s.tag = tag;
+	s.fd = c;
+	spawn sessionout(l, s);
+	return (s, cli);
+}
+
+# plaintext -> link
+sessionout(l: ref Link, s: ref Sess)
 {
     {
-	ctr := 0;
 	buf := array[MAXREC] of byte;
+	n := 0;
 	for(;;){
-		n := sys->read(r, buf, len buf);
+		if(s.fd == nil)
+			break;
+		n = sys->read(s.fd, buf, len buf);
 		if(n <= 0)
 			break;
-		if(cryptwrite(net, key, ctr, buf[0:n]) < 0)
-			break;
-		ctr++;
+		l.send <-= (s.tag, DATA, buf[0:n]);
 	}
-	r = nil;
-	done <-= 1;
+	if(n == 0)
+		l.send <-= (s.tag, FIN, array[0] of byte);
+	s.fd = nil;
     } exception e {
-    "*" => sys->print("monoauth: pumpout failed: %s\n", e);
+    "*" => sys->print("monoauth: session failed: %s\n", e);
     }
 }
 
-servecrypt(io: ref Sys->FileIO, r: ref Sys->FD, w: ref Sys->FD)
+find(l: ref Link, tag: int): ref Sess
 {
-    {
-	spawn servewrites(io, w);
-	for(;;){
-		(off, n, fid, rc) := <-io.read;
-		if(rc == nil)		# file closed
-			break;
-		buf := array[n] of byte;
-		m := sys->read(r, buf, n);
-		if(m <= 0)
-			rc <-= (array[0] of byte, nil);
-		else
-			rc <-= (buf[0:m], nil);
-	}
-    } exception e {
-    "*" => sys->print("monoauth: servecrypt failed: %s\n", e);
-    }
+	for(sl := l.sessions; sl != nil; sl = tl sl)
+		if((hd sl).tag == tag)
+			return hd sl;
+	return nil;
 }
 
-servewrites(io: ref Sys->FileIO, w: ref Sys->FD)
+remove(l: list of ref Sess, s: ref Sess): list of ref Sess
 {
-    {
-	for(;;){
-		(off, data, fid, wc) := <-io.write;
-		if(wc == nil)		# file closed
-			break;
-		n := sys->write(w, data, len data);
-		if(n < 0)
-			wc <-= (-1, sys->sprint("%r"));
-		else
-			wc <-= (n, nil);
-	}
-    } exception e {
-    "*" => sys->print("monoauth: servewrites failed: %s\n", e);
-    }
+	r: list of ref Sess;
+	for(; l != nil; l = tl l)
+		if(hd l != s)
+			r = hd l :: r;
+	return r;
 }
 
-reap(path: string, done: chan of int)
+# A loopback socket pair gives one bidirectional fd per session, which
+# mount(2) and export(2) accept.
+socketpair(): (ref Sys->FD, ref Sys->FD)
 {
-    {
-	<-done;
-	<-done;
-	sys->remove(path);
-    } exception e {
-    "*" => sys->print("monoauth: reap failed: %s\n", e);
-    }
+	c := dial->announce("tcp!127.0.0.1!0");
+	if(c == nil)
+		return (nil, nil);
+	addr := localaddr(c);
+	if(addr == nil)
+		return (nil, nil);
+	cli := dial->dial("tcp!" + addr, nil);
+	if(cli == nil)
+		return (nil, nil);
+	srv := dial->listen(c);
+	if(srv == nil)
+		return (nil, nil);
+	sfd := dial->accept(srv);
+	if(sfd == nil)
+		return (nil, nil);
+	return (sfd, cli.dfd);
+}
+
+localaddr(c: ref Dial->Connection): string
+{
+	fd := sys->open(c.dir + "/local", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	s := string buf[0:n];
+	while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == ' '))
+		s = s[0:len s-1];
+	return s;
 }
 
 # ---- identity files --------------------------------------------------
@@ -412,14 +470,6 @@ readrandom(n: int): array of byte
 	if(sys->readn(fd, buf, n) != n)
 		return nil;
 	return buf;
-}
-
-mkpipe(): (ref Sys->FD, ref Sys->FD)
-{
-	fds := array[2] of ref Sys->FD;
-	if(sys->pipe(fds) < 0)
-		return (nil, nil);
-	return (fds[0], fds[1]);
 }
 
 allwrite(fd: ref Sys->FD, buf: array of byte): int
