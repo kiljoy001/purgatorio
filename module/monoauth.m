@@ -29,4 +29,5 @@ Monoauth: module
 	link:		fn(keyfile: string, fd: ref Sys->FD, isserver: int): (ref Link, string);
 	linkaccept:	fn(l: ref Link): (int, ref Sys->FD);
 	linkopen:	fn(l: ref Link, tag: int): ref Sys->FD;
+	linkclose:	fn(l: ref Link, tag: int);
 };

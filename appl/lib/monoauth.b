@@ -275,6 +275,39 @@ linkaccept(l: ref Link): (int, ref Sys->FD)
 	return (tag, fd);
 }
 
+# hangup sends a reset, so the peer of fd (here, the caller's session
+# socket) sees an error rather than waiting forever for EOF.
+hangup(fd: ref Sys->FD)
+{
+	if(fd == nil)
+		return;
+	path := sys->fd2path(fd);
+	if(path == nil)
+		return;
+	# /net/tcp/N/data -> /net/tcp/N/ctl
+	i := len path - 1;
+	while(i > 0 && path[i] != '/')
+		i--;
+	if(i <= 0)
+		return;
+	ctl := sys->open(path[0:i] + "/ctl", Sys->OWRITE);
+	if(ctl == nil)
+		return;
+	sys->fprint(ctl, "hangup");
+	ctl = nil;
+}
+
+linkclose(l: ref Link, tag: int)
+{
+	s := find(l, tag);
+	if(s == nil)
+		return;
+	hangup(s.fd);
+	s.fd = nil;
+	l.send <-= (tag, FIN, array[0] of byte);
+	l.sessions = remove(l.sessions, s);
+}
+
 linkopen(l: ref Link, tag: int): ref Sys->FD
 {
 	(s, cli) := mksession(l, tag);
@@ -314,6 +347,7 @@ linkread(l: ref Link, key: array of byte)
 		FIN =>
 			s := find(l, tag);
 			if(s != nil){
+				hangup(s.fd);
 				s.fd = nil;
 				l.sessions = remove(l.sessions, s);
 			}
