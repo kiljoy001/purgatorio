@@ -29,6 +29,8 @@ serverkey: ref Keyring->Authinfo;
 verbose := 0;
 mono := 0;
 monokey: string;
+monolink: ref Monoauth->Link;
+montag := 0;
 
 init(drawctxt: ref Draw->Context, argv: list of string)
 {
@@ -232,9 +234,16 @@ authenticator(authch: chan of (string, ref Dial->Connection),
 		c: ref Dial->Connection, algs: list of string, addr: string)
 {
 	err: string;
-	if(mono)
-		(c.dfd, err) = monoauth->server(monokey, c.dfd);
-	else
+	if(mono){
+		(monolink, err) = monoauth->link(monokey, c.dfd, 1);
+		if(monolink == nil){
+			c.dfd = nil;
+			sys->fprint(stderr(), "listen: mono on %s failed: %s\n", addr, err);
+			return;
+		}
+		(montag, c.dfd) = monoauth->linkaccept(monolink);
+		err = monolink.name;
+	} else
 		(c.dfd, err) = auth->server(algs, serverkey, c.dfd, 0);
 	if (c.dfd == nil) {
 		sys->fprint(stderr(), "listen: auth on %s failed: %s\n", addr, err);
