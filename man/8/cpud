@@ -1,0 +1,101 @@
+.TH CPUD 8
+.SH NAME
+cpud \- policy-enforcing remote execution service
+.SH SYNOPSIS
+.B cpud
+.SH DESCRIPTION
+.I Cpud
+is a CLI-only replacement for
+.IR rstyxd (8)
+for servers that do not need the draw device.
+It is normally started by
+.IR listen (1)
+through
+.BR svc/cpud ,
+which authenticates the connection and runs
+.B cpud
+as the authenticated user.
+.PP
+.I Cpud
+reads the command string exported by the client, checks the real
+command against
+.BR /lib/cpud.conf ,
+logs the session, mounts the client namespace on
+.BR /n/client ,
+binds the client's
+.B /dev
+over the server's
+.BR /dev ,
+and runs the command.
+.PP
+The client is
+.IR cpu (1)
+or
+.IR rcmd (1).
+No draw, mouse or keyboard device is involved; sessions are terminal
+and command sessions only.
+.SH CONFIGURATION
+.B /lib/cpud.conf
+contains one directive per line:
+.TP
+.BI allow " command"
+Allow
+.I command
+(a basename such as
+.BR sh ,
+.BR echo ,
+or
+.BR rcmd ).
+If there is at least one allow line, anything not listed is denied.
+.TP
+.B allow *
+Allow every command.
+.TP
+.BI deny " command"
+Deny
+.I command;
+deny overrides allow.
+.TP
+.BI log " path"
+Write session start/deny records to
+.IR path .
+The default is
+.BR /tmp/cpud.log .
+.PP
+With no allow lines
+.I cpud
+allows every command, matching
+.IR rstyxd (8)
+behaviour.  A missing configuration file is treated as an empty file.
+.PP
+Allowing
+.B sh
+allows arbitrary commands inside the shell.  For a restricted service,
+list only the commands users need and do not allow
+.BR sh .
+.SH FILES
+.TF /tmp/cpud.log
+.TP
+.B /lib/cpud.conf
+command policy and log path
+.TP
+.B /tmp/cpud.log
+default session log
+.TP
+.B /n/client
+client namespace mount point
+.SH SOURCE
+.B /appl/cmd/cpud.b
+.SH SEE ALSO
+.IR cpu (1),
+.IR rcmd (1),
+.IR listen (1),
+.IR rstyxd (8),
+.IR svc (8)
+.SH BUGS
+Session counts and idle timeouts are not enforced yet.  Authentication,
+TLS and user identity are handled by
+.IR listen (1);
+.I cpud
+does not inspect the peer address or apply per-user policy beyond the
+command allowlist.

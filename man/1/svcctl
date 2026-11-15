@@ -1,0 +1,99 @@
+.TH SVCCTL 1
+.SH NAME
+svcctl \- inspect and control svcd services
+.SH SYNOPSIS
+.B svcctl
+[
+.B status
+]
+.br
+.B svcctl
+.BI start " name"
+.br
+.B svcctl
+.BI stop " name"
+.br
+.B svcctl
+.BI restart " name"
+.br
+.B svcctl
+.B log
+.I name
+.br
+.B svcctl
+.B stopall
+.br
+.B svcctl
+.B startall
+.br
+.B svcctl
+.B ctl
+.SH DESCRIPTION
+.I Svcctl
+shows the state of the services managed by
+.IR svcd (8)
+and commands changes.
+.PP
+With no arguments, or with
+.BR status ,
+it prints
+.B /tmp/svcd/status
+one line per service:
+.IP
+.EX
+cpu running pid=31 restarts=0
+tick backoff pid=0 restarts=4
+.EE
+.PP
+A state of
+.B running
+means the service pid is alive.
+.B running(group)
+means the service leader exited but its process group is still
+serving,
+.I listen (1)
+being the usual cause.
+.B backoff
+means the service exited and is waiting to be restarted;
+.B restarts
+counts the restarts since
+.I svcd
+started.
+.PP
+The
+.BR start ,
+.BR stop ,
+.BR restart ,
+.B stopall
+and
+.B startall
+commands are written to
+.BR /tmp/svcd/ctl .
+A stopped service stays stopped until it is started again or
+.I svcd
+restarts; the stop is not recorded anywhere that survives
+.IR svcd .
+.PP
+.B svcctl log
+.I name
+prints that service's output, and
+.B svcctl ctl
+prints the
+.I svcd
+event log.
+.SH FILES
+.TF /tmp/svcd/status
+.TP
+.B /tmp/svcd/status
+service state
+.TP
+.B /tmp/svcd/ctl
+control file
+.TP
+.B /tmp/svcd/log
+.I svcd
+events
+.SH SOURCE
+.B /appl/cmd/svcctl.b
+.SH SEE ALSO
+.IR svcd (8)

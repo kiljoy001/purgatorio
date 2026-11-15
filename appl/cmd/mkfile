@@ -51,6 +51,7 @@ TARG=\
 	cprof.dis\
 	cp.dis\
 	cpu.dis\
+	cpud.dis\
 	crypt.dis\
 	date.dis\
 	dbfs.dis\
@@ -147,6 +148,8 @@ TARG=\
 	styxmon.dis\
 	styxlisten.dis\
 	sum.dis\
+	svcd.dis\
+	svcctl.dis\
 	tac.dis\
 	tail.dis\
 	tarfs.dis\

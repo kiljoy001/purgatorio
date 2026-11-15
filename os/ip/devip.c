@@ -58,6 +58,7 @@ Queue	*qlog;
 
 extern	void nullmediumlink(void);
 extern	void pktmediumlink(void);
+extern	void loopbackmediumlink(void);
 static	long ndbwrite(Fs*, char*, ulong, int);
 static	void	closeconv(Conv*);
 
@@ -254,6 +255,7 @@ ipreset(void)
 {
 	nullmediumlink();
 	pktmediumlink();
+	loopbackmediumlink();
 
 	fmtinstall('i', eipfmt);
 	fmtinstall('I', eipfmt);

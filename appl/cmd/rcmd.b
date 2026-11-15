@@ -6,6 +6,8 @@ include "arg.m";
 include "keyring.m";
 include "dial.m";
 include "security.m";
+include "string.m";
+	str: String;
 
 Rcmd: module
 {
@@ -23,6 +25,9 @@ init(nil: ref Draw->Context, argv: list of string)
 	dial = load Dial Dial->PATH;
 	if(dial == nil)
 		badmodule(Dial->PATH);
+	str = load String String->PATH;
+	if(str == nil)
+		badmodule(String->PATH);
 	arg := load Arg Arg->PATH;
 	if(arg == nil)
 		badmodule(Arg->PATH);
@@ -62,11 +67,10 @@ init(nil: ref Draw->Context, argv: list of string)
 	addr := hd argv;
 	argv = tl argv;
 
-	args := "";
-	while(argv != nil){
-		args += " " + hd argv;
-		argv = tl argv;
-	}
+	# The rstyxd protocol parses a single quoted command string.
+	# Quote each argument; otherwise an argument containing spaces
+	# is split on the server (e.g. sh -c 'echo hello').
+	args := str->quoted(argv);
 	if(args == "")
 		args = "sh";
 

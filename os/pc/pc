@@ -17,7 +17,7 @@ dev
 	pointer
 	vga
 
-	ip	bootp ip ipv6 ipaux iproute arp netlog ptclbsum386 iprouter plan9 nullmedium pktmedium
+	ip	bootp ip ipv6 ipaux iproute arp netlog ptclbsum386 iprouter plan9 nullmedium pktmedium loopbackmedium
 	ether		netif netaux ethermedium
 
 #	ata # Breaks on Linux/amd64
@@ -251,6 +251,7 @@ root
 	/dis/cp.dis
 	/dis/cprof.dis
 	/dis/cpu.dis
+	/dis/cpud.dis
 	/dis/crypt.dis
 	/dis/date.dis
 	/dis/dbfs.dis
@@ -756,6 +757,8 @@ root
 	/dis/styxlisten.dis
 	/dis/styxmon.dis
 	/dis/sum.dis
+	/dis/svcd.dis
+	/dis/svcctl.dis
 	/dis/svc/httpd/alarms.dis
 	/dis/svc/httpd/cache.dis
 	/dis/svc/httpd/cgiparse.dis

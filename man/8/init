@@ -89,6 +89,74 @@ or
 or
 .IR kfs (3)
 to serve local files from disk or flash memory.
+.PP
+The
+.B shell
+initialisation used by the native PC kernel
+.RB ( /os/init/shell.b ,
+selected by the
+.B init
+section of
+.B /os/pc/pc )
+is deliberately small, because the machine is expected to be headless:
+.IP 1.
+mount the kfs64 file system on
+.B #S/sd00/data
+as
+.BR / ,
+if the disk is present; otherwise keep the root embedded in the kernel;
+.IP 2.
+mount the 9vm host file system
+.B #~/host
+on
+.BR /n/host ,
+when the hypervisor offers the shared 9P ring;
+.IP 3.
+bind
+.BR #l
+and
+.BR #I
+on
+.BR /net ,
+.B #p
+on
+.BR /prog ,
+.B #d
+on
+.BR /fd ,
+.B #s
+on
+.BR /chan ,
+and the draw, serial, console and flash devices on
+.BR /dev ;
+.IP 4.
+bring up the loopback interface by cloning
+.B /net/ipifc/clone
+and adding
+.BR 127.0.0.1/8 ;
+.IP 5.
+configure a wider interface from
+.B /n/host/net.conf
+if it exists, binding
+.IR ether (3)
+and running its
+.B cmd
+line;
+.IP 6.
+start
+.IR svcd (8),
+which reads
+.B /lib/svcd.conf
+or, when present,
+.BR /n/host/svcd.conf ,
+and runs the services listed there;
+.IP 7.
+start the console shell.
+.PP
+Steps 4 to 6 mean that a freshly provisioned disk boots to a working
+host: loopback is up, and any service named in the configuration is
+running and restarted when it exits, before anyone types at the
+console.
 .SH FILES
 .B /env/emuargs
 .SH SOURCE
@@ -96,4 +164,7 @@ to serve local files from disk or flash memory.
 .br
 .B /os/init/*.b
 .SH SEE ALSO
-.IR emu (1)
+.IR emu (1),
+.IR svcd (8),
+.IR svcctl (1),
+.IR listen (1)

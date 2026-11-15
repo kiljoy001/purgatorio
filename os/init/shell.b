@@ -20,6 +20,11 @@ Mount: module
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
+Svcd: module
+{
+	init:	fn(nil: ref Draw->Context, nil: list of string);
+};
+
 init(drawcontext: ref Draw->Context, nil: list of string)
 {
 	shell := load Sh "/dis/sh.dis";
@@ -50,7 +55,9 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 #	sys->bind("#O", "/dev", sys->MAFTER);	# Modem
 #	sys->bind("#T","/dev",sys->MAFTER);	# Touchscreen
 
+	loopback();
 	netstart();
+	svcstart();
 	srv();
 
 	spawn shell->init(nil, nil);
@@ -105,6 +112,56 @@ hostmount(ctxt: ref Draw->Context)
 	"*" =>
 		sys->print("init: 9ring host mount failed: %r\n");
 	}
+}
+
+# Bring up 127.0.0.1.  Every host needs it: remote execution and file
+# services are usually tested locally before they face the network.
+loopback()
+{
+	cfd := sys->open("/net/ipifc/clone", Sys->ORDWR);
+	if(cfd == nil){
+		sys->print("init: no /net/ipifc/clone: %r\n");
+		return;
+	}
+	buf := array[32] of byte;
+	n := sys->read(cfd, buf, len buf);
+	cfd = nil;
+	if(n <= 0){
+		sys->print("init: cannot clone a loopback interface\n");
+		return;
+	}
+	# The clone file returns the interface number as decimal text.
+	i := 0;
+	while(i < n && buf[i] >= byte '0' && buf[i] <= byte '9')
+		i++;
+	if(i == 0)
+		return;
+	num := string buf[0:i];
+	ctl := sys->open("/net/ipifc/" + num + "/ctl", Sys->OWRITE);
+	if(ctl == nil){
+		sys->print("init: cannot open /net/ipifc/%s/ctl: %r\n", num);
+		return;
+	}
+	if(sys->fprint(ctl, "bind loopback") < 0 ||
+	   sys->fprint(ctl, "add 127.0.0.1 255.0.0.0") < 0)
+		sys->print("init: loopback setup failed: %r\n");
+	else
+		sys->print("init: loopback 127.0.0.1\n");
+	ctl = nil;
+}
+
+# Start the service manager.  It reads /lib/svcd.conf, or the host's
+# /n/host/svcd.conf when present, and is responsible for everything
+# that is not the console shell.  A root without svcd.dis (an old
+# image) simply keeps the shell.
+svcstart()
+{
+	svcd := load Svcd "/dis/svcd.dis";
+	if(svcd == nil){
+		sys->print("init: no /dis/svcd.dis: %r; no services\n");
+		return;
+	}
+	spawn svcd->init(nil, "svcd" :: nil);
 }
 
 # Optional per-VM network and payload configuration:

@@ -1,0 +1,141 @@
+.TH SVCD 8
+.SH NAME
+svcd \- run and restart services on a headless Inferno host
+.SH SYNOPSIS
+.B svcd
+[
+.B -c
+.I config
+]
+.SH DESCRIPTION
+.I Svcd
+is the service manager for a command-line Inferno machine.
+It reads a list of services, runs each one as its own process group in
+its own namespace, restarts it when it exits, and records status under
+.BR /tmp/svcd .
+.PP
+The configuration is read from
+.B /lib/svcd.conf
+or, when it exists, from
+.BR /n/host/svcd.conf .
+The
+.B -c
+option names another file.
+Each non-comment line is a service name followed by the command and its
+arguments:
+.IP
+.EX
+# name	command args...
+cpu	/dis/sh.dis -c 'listen -s tcp!*!rstyx {runas $user cpud &}'
+tick	/dis/sh.dis -c 'echo tick; /dis/sleep.dis 3'
+-crash	/dis/willfail.dis
+.EE
+.PP
+A leading
+.B -
+disables a service without removing the line.
+The command line is split with
+.IR string (2)
+quoting rules, so
+.B '...'
+groups arguments containing spaces.
+.PP
+Each service is started with
+.BR pctl (2)
+.BR NEWPGRP ,
+.BR FORKNS
+and
+.BR FORKFD :
+it gets a private copy of the namespace, its own file descriptors, and
+a new process group.  Its standard input, output and error are
+redirected to
+.BR /tmp/svcd/\fIname\fP.log ,
+which is truncated on each start.
+.PP
+Because the service has its own process group, a service that
+daemonises is still supervised.
+.I Listen
+does exactly that: its
+.I init
+spawns the listener and returns.
+.I Svcd
+notices that the group is still alive and keeps supervising it instead
+of restarting into
+.IR "address in use" .
+Use
+.B listen -s
+if the service should stay in the foreground.
+.PP
+When a service exits, it is restarted with an exponential backoff of
+1, 2, 4, 8, 16 and then 30 seconds.  A run that lasted more than 30
+seconds resets the backoff to one second, so a service that starts
+cleanly and runs for a while is restarted immediately after a crash.
+.SS Control
+.I Svcd
+polls
+.B /tmp/svcd/ctl
+once a second.  Write one command per line:
+.IP
+.EX
+start \fIname\fP
+stop \fIname\fP
+restart \fIname\fP
+stopall
+startall
+status
+.EE
+.PP
+.I Svcctl
+is the convenient interface.
+.SH FILES
+.TF /tmp/svcd/status
+.TP
+.B /lib/svcd.conf
+service list (default)
+.TP
+.B /n/host/svcd.conf
+host-provided service list, preferred when present
+.TP
+.B /tmp/svcd/status
+one line per service:
+.BI name " " state " pid=" pid " restarts=" count
+.TP
+.B /tmp/svcd/ctl
+control file
+.TP
+.B /tmp/svcd/log
+.I svcd
+events: starts, exits, backoff, control commands
+.TP
+.BI /tmp/svcd/ name .log
+service standard output and error
+.TP
+.B /tmp/svcd/svcd.pid
+.I svcd
+process id
+.SH EXAMPLE
+.IP
+.EX
+; cat /lib/svcd.conf
+cpu	/dis/sh.dis -c 'listen -s tcp!*!rstyx /dis/cpud.dis'
+; svcd &
+; svcctl
+cpu running pid=31 restarts=0
+.EE
+.SH SOURCE
+.B /appl/cmd/svcd.b
+.SH SEE ALSO
+.IR svcctl (1),
+.IR listen (1),
+.IR cpud (8),
+.IR svc (8)
+.SH BUGS
+Supervision is liveness of a pid or of a live process group, not of
+the service's health: a wedged listener is left alone.  There is no
+per-service resource limit, user switch, dependency ordering, or idle
+timeout.  Status is written when state changes, not continuously.
+.PP
+Because the control file is read whole and truncated, two commands
+written in the same second run as one; use
+.I svcctl
+for anything scripted.

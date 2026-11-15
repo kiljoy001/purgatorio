@@ -6,6 +6,7 @@ DIRS=\
 
 SHTARG=\
 	auth.sh\
+	cpud.sh\
 	net.sh\
 	registry.sh\
 	rstyx.sh\
