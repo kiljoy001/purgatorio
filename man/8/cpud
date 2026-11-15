@@ -73,6 +73,38 @@ Allowing
 allows arbitrary commands inside the shell.  For a restricted service,
 list only the commands users need and do not allow
 .BR sh .
+.SH AUTHENTICATION
+.I Cpud
+does not authenticate anyone itself.
+It is run by
+.IR listen (1)
+after the connection has been authenticated, normally through
+.B /lib/cpusession.sh
+which is just
+.BI "runas $user /dis/cpud.dis" .
+.I Listen
+sets
+.B $user
+to the name in the client's certificate, so the session runs as that
+name and
+.I cpud
+records it in the log.
+.PP
+The certificates come from
+.IR certify (8).
+A service started with
+.B listen \-A
+skips authentication entirely: every caller becomes the listener's
+user and may run anything the policy allows.
+.PP
+The user name is not a containment boundary inside a single Inferno
+instance.
+.B runas
+changes
+.BR /dev/user ,
+but any process can do that.  What limits a session is the
+.BR /lib/cpud.conf
+allowlist and the resources mounted in the client namespace.
 .SH FILES
 .TF /tmp/cpud.log
 .TP
@@ -93,9 +125,10 @@ client namespace mount point
 .IR rstyxd (8),
 .IR svc (8)
 .SH BUGS
-Session counts and idle timeouts are not enforced yet.  Authentication,
-TLS and user identity are handled by
+Session counts and idle timeouts are not enforced yet.  Authentication
+and channel encryption are handled by
 .IR listen (1);
 .I cpud
 does not inspect the peer address or apply per-user policy beyond the
-command allowlist.
+command allowlist, and a global allowlist means every authenticated
+user may run every allowed command.

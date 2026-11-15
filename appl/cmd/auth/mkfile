@@ -6,6 +6,7 @@ DIRS=\
 TARG=\
 	aescbc.dis\
 	ai2key.dis\
+	certify.dis\
 	changelogin.dis\
 	countersigner.dis\
 	convpasswd.dis\

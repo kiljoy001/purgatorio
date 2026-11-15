@@ -25,6 +25,11 @@ Svcd: module
 	init:	fn(nil: ref Draw->Context, nil: list of string);
 };
 
+Certify: module
+{
+	init:	fn(nil: ref Draw->Context, argv: list of string);
+};
+
 init(drawcontext: ref Draw->Context, nil: list of string)
 {
 	shell := load Sh "/dis/sh.dis";
@@ -57,6 +62,7 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 
 	loopback();
 	netstart();
+	firstboot();
 	svcstart();
 	srv();
 
@@ -148,6 +154,25 @@ loopback()
 	else
 		sys->print("init: loopback 127.0.0.1\n");
 	ctl = nil;
+}
+
+# First boot: create the signer key and the console user's certificate
+# if they are missing.  Every box gets its own key, so certificates are
+# not shared between machines; the cost is that a client has to be given
+# a certificate out of band, exactly like an ssh host key.
+firstboot()
+{
+	c := load Certify "/dis/auth/certify.dis";
+	if(c == nil){
+		sys->print("init: no /dis/auth/certify.dis: %r; no certificates\n");
+		return;
+	}
+	{
+		c->init(nil, "certify" :: "firstboot" :: nil);
+	} exception {
+	"*" =>
+		sys->print("init: firstboot certification failed\n");
+	}
 }
 
 # Start the service manager.  It reads /lib/svcd.conf, or the host's

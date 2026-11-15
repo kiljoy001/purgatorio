@@ -1,0 +1,165 @@
+.TH CERTIFY 8
+.SH NAME
+certify \- create and inspect authentication certificates
+.SH SYNOPSIS
+.B certify
+.B init
+[
+.I owner
+]
+.br
+.B certify
+.B user
+.I name
+[
+.I file
+]
+.br
+.B certify firstboot
+.br
+.B certify show
+.SH DESCRIPTION
+.I Certify
+makes the two files that Inferno's mutual authentication needs: a
+signer key for the machine, and one certificate per user.
+.PP
+The authentication protocol
+.RB ( keyring-auth (2))
+has each side send a certificate signed by a common signer, and prove
+possession of the corresponding secret key.  It does not require the
+signer to be on line: the signer's
+.I public
+key travels inside every certificate as
+.BR spk ,
+and each side verifies the other's certificate with it.
+.I Certify
+therefore needs no
+.IR keyfs (4),
+.IR signer (8)
+or
+.IR logind (8)
+daemon.
+.SS Init
+.B certify init
+creates
+.B /keydb/signerkey
+for
+.IR owner
+(default
+.BR signer ).
+The file holds the signer's private key and must be readable only by
+root.  An existing key is never replaced: replacing it invalidates
+every certificate already issued.
+.SS User
+.B certify user
+.I name
+writes a certificate for
+.I name
+to
+.IR file ,
+by default
+.BR /usr/\fIname\fP/keyring/default ,
+creating the directory if necessary.
+The certificate contains a secret key derived from the signer's public
+key and the user name, so the same command always produces the same
+certificate for the same machine and name.
+.PP
+Give the file to the user; it is what
+.I listen
+reads on the server and what
+.IR rcmd (1)
+or
+.IR cpu (1)
+present on the client.  With
+.IR rcmd ,
+.B \-f
+.IR file
+selects it.
+.SS Firstboot
+.B certify firstboot
+is what the PC kernel's init runs before starting
+.IR svcd (8):
+create the signer key if it is missing, then create a certificate for
+the console user (the name in
+.BR /dev/user )
+if that is missing too.  This makes a freshly provisioned machine
+usable without an operator, at the cost of a key that differs from
+machine to machine.
+.SS Show
+.B certify show
+prints the signer key and every
+.B /usr/*/keyring/default
+it can find.
+.SH EXAMPLES
+Create the machine key and a certificate for the console user:
+.IP
+.EX
+; certify firstboot
+certify: signer key for signer in /keydb/signerkey
+certify: inferno -> /usr/inferno/keyring/default
+.EE
+.PP
+Add a user, then run a command as that user:
+.IP
+.EX
+; certify user alice
+certify: alice -> /usr/alice/keyring/default
+; rcmd -f /usr/alice/keyring/default -e rc4_128 tcp!server!6668 echo hello
+hello
+.EE
+.PP
+The server side needs the same command started through
+.IR listen (1)
+with authentication enabled, for example:
+.IP
+.EX
+listen -a rc4_128 tcp!*!6668 /dis/sh.dis /lib/cpusession.sh
+.EE
+.PP
+where
+.B /lib/cpusession.sh
+runs
+.BI "runas $user /dis/cpud.dis" ;
+.I listen
+sets
+.B $user
+from the certificate the client presented.
+.SH FILES
+.TF /usr/\fIname\fP/keyring/default
+.TP
+.B /keydb/signerkey
+signer private key; root only
+.TP
+.BI /usr/ name /keyring/default
+user certificate
+.SH SOURCE
+.B /appl/cmd/auth/certify.b
+.SH SEE ALSO
+.IR listen (1),
+.IR rcmd (1),
+.IR cpu (1),
+.IR cpud (8),
+.IR keyring-auth (2),
+.IR createsignerkey (8),
+.IR mkauthinfo (8)
+.SH BUGS
+One signer key per machine, and it never expires.  There is no
+revocation list: to withdraw a user, remove the certificate file, and
+to withdraw everyone, replace
+.B /keydb/signerkey
+and reissue.
+.PP
+A certificate is a bearer token.  Anyone who can read it can act as
+that user, and anyone who can read
+.B /keydb/signerkey
+can mint a certificate for any name.
+.PP
+Within a single Inferno instance, identity is advisory:
+.B runas
+sets
+.B /dev/user
+but does not confine the process.  The boundary that matters is what
+.I cpud
+agrees to run
+.RB ( cpud (8)),
+not the user name it reports.

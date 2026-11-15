@@ -78,6 +78,7 @@ mod
 	draw
 	tk
 	keyring
+	crypt
 	math
 
 init
@@ -131,6 +132,7 @@ root
 	/prog	/
 	/osinit.dis
 	/lib/wmsetup
+	/lib/cpusession.sh
 	/icons/tk/exit.bit
 	/icons/tk/task.bit
 	/icons/tk/maxf.bit
@@ -173,6 +175,7 @@ root
 	/dis/auplay.dis
 	/dis/auth/aescbc.dis
 	/dis/auth/ai2key.dis
+	/dis/auth/certify.dis
 	/dis/auth/changelogin.dis
 	/dis/auth/convpasswd.dis
 	/dis/auth/countersigner.dis

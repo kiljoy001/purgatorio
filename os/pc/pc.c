@@ -86,12 +86,14 @@ extern void sysmodinit(void);
 extern void drawmodinit(void);
 extern void tkmodinit(void);
 extern void keyringmodinit(void);
+extern void cryptmodinit(void);
 extern void mathmodinit(void);
 void modinit(void){
 	sysmodinit();
 	drawmodinit();
 	tkmodinit();
 	keyringmodinit();
+	cryptmodinit();
 	mathmodinit();
 }
 
