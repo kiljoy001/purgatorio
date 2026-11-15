@@ -1,0 +1,122 @@
+.TH MONO 2
+.SH NAME
+mono: aeadlock, aeadunlock, blake2b, x25519, edkeypair, edsign, edcheck, equal, version \- Monocypher cryptography
+.SH SYNOPSIS
+.EX
+include "mono.m";
+mono := load Mono Mono->PATH;
+
+aeadlock:   fn(key, nonce, ad, plain: array of byte):
+                (array of byte, array of byte);
+aeadunlock: fn(key, nonce, tag, ad, cipher: array of byte): array of byte;
+blake2b:    fn(msg, key: array of byte, n: int): array of byte;
+x25519:     fn(sk, pk: array of byte): array of byte;
+edkeypair:  fn(seed: array of byte): (array of byte, array of byte);
+edsign:     fn(sk, msg: array of byte): array of byte;
+edcheck:    fn(sig, pk, msg: array of byte): int;
+equal:      fn(a, b: array of byte): int;
+version:    fn(): string;
+.EE
+.SH DESCRIPTION
+.I Mono
+exposes
+.B Monocypher
+version 4.0.2 to Dis: XChaCha20-Poly1305, BLAKE2b, X25519 and EdDSA.
+It is a builtin module, like
+.IR Crypt ,
+so it is available in the native kernel and in
+.IR emu .
+Arguments and results are copies; no pointer into the interpreter heap is
+passed to the C library.
+.PP
+.B aeadlock
+encrypts
+.I plain
+with
+.I key
+(32 bytes) and
+.I nonce
+(24 bytes), authenticating
+.I ad
+(which may be nil), and returns the ciphertext and a 16-byte tag.
+.B aeadunlock
+returns the plaintext, or
+.B nil
+if the tag does not verify (a wrong tag, key, nonce or associated data
+all produce
+.BR nil ,
+not an error).
+.PP
+.B blake2b
+hashes
+.I msg
+to
+.I n
+bytes, 1 to 64.  When
+.I key
+is non-nil (at most 64 bytes) the keyed variant is used.
+.PP
+.B x25519
+multiplies the 32-byte scalar
+.I sk
+by the 32-byte point
+.IR pk .
+.PP
+.B edkeypair
+takes a 32-byte
+.I seed
+and returns a 64-byte secret key and a 32-byte public key.
+.B edsign
+signs with the secret key and returns 64 bytes;
+.B edcheck
+returns 1 if the signature is good and 0 otherwise.
+.PP
+.B equal
+compares two arrays in constant time (for tags and keys).
+.B version
+returns the Monocypher version string.
+.SH EXAMPLES
+Encrypt and authenticate a message:
+.IP
+.EX
+(ct, tag) := mono->aeadlock(key, nonce, ad, plain);
+if(mono->aeadunlock(key, nonce, tag, ad, ct) == nil)
+	raise "fail:tampered";
+.EE
+.PP
+Key agreement:
+.IP
+.EX
+mine := mono->x25519(mysk, theirpk);
+.EE
+.SH SOURCE
+.B /module/mono.m
+.br
+.B /libinterp/mono.c
+.br
+.B /libsec/port/monocypher.c
+.SH SEE ALSO
+.IR crypt (2),
+.IR keyring (2),
+.IR certify (8),
+.IR monotest (1)
+.SH BUGS
+EdDSA is Monocypher's BLAKE2b-based variant, not the SHA-512 construction
+of RFC 8032, so RFC 8032 test vectors do not apply and signatures are not
+interchangeable with other Ed25519 implementations.
+.PP
+The library arrived from the Plan 9 port in
+.BR factotum-libtab .
+Three source changes were needed for Inferno's
+.IR 8c :
+the ACSL comment inside the
+.B FOR_T
+macro was dropped, the Poly1305 block multiplication is written as
+separate statements because
+.I 8c
+aborts in its 64-bit register allocator on the original expression, and
+64-bit constants carry a
+.B ULL
+suffix, which
+.I 8c
+requires.

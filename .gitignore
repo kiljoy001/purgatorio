@@ -71,6 +71,7 @@ usr/
 grid/
 libinterp/*mod.h
 libinterp/keyring*.h
+libinterp/monoif.h
 libinterp/runt.h
 limbo/runt.h
 os/pc/ipc

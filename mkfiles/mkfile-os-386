@@ -14,7 +14,7 @@ AS=		8a
 ASFLAGS=
 
 CC=		8c
-CFLAGS=		-wFV -I$ROOT/Inferno/386/include -I$ROOT/include
+CFLAGS=		-wFV -DMONO_INFERNO -I$ROOT/Inferno/386/include -I$ROOT/include
 ANSICPP= -p
 
 LD=		8l

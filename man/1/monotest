@@ -1,0 +1,26 @@
+.TH MONOTEST 1
+.SH NAME
+monotest \- self-test for the Monocypher module
+.SH SYNOPSIS
+.B monotest
+.SH DESCRIPTION
+.I Monotest
+exercises
+.IR mono (2)
+and prints one line per test: BLAKE2b against the specification's
+digest of
+.RB ` "abc" ','
+an XChaCha20-Poly1305 round trip with a tampered tag and a tampered
+associated-data value, X25519 agreement between two key pairs, and
+EdDSA sign, verify and rejection of a changed message.
+It raises
+.B fail:tests
+if any test fails, so it can gate a build:
+.IP
+.EX
+; monotest || echo crypto is broken
+.EE
+.SH SOURCE
+.B /appl/cmd/monotest.b
+.SH SEE ALSO
+.IR mono (2)

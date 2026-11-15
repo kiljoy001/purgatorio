@@ -31,6 +31,7 @@ OFILES=\
 	xec.$O\
 	das-$OBJTYPE.$O\
 	keyring.$O\
+	mono.$O\
 	string.$O\
 
 HFILES=\
@@ -51,6 +52,7 @@ MODULES=\
 	../module/freetype.m\
 	../module/ipints.m\
 	../module/crypt.m\
+	../module/mono.m\
 	keyringif.m\
 
 <$ROOT/mkfiles/mksyslib-$SHELLTYPE
@@ -94,6 +96,11 @@ cryptmod.h:D:	$MODULES
 keyringif.h:D:	$MODULES keyringif.m
 	rm -f $target && limbo -a -I../module keyringif.m > $target
 
+monoif.h:D:	$MODULES
+	rm -f $target && limbo -a -I../module ../module/mono.m > $target
+monomod.h:D:	$MODULES
+	rm -f $target && limbo -t Mono -I../module ../module/mono.m > $target
+
 
 bench.h:D:../module/bench.m
 	rm -f $target && limbo -a -I../module ../module/bench.m > $target
@@ -110,6 +117,7 @@ draw.$O:	drawmod.h
 tk.$O:		$ROOT/include/draw.h tkmod.h
 math.$O:	mathmod.h
 keyring.$O:	keyring.h ipint.h keyringif.h
+mono.$O:	monoif.h monomod.h
 crypt.$O:	ipint.h runt.h cryptmod.h
 ipint.$O:	ipint.h ipintsmod.h
 loader.$O:	loadermod.h
@@ -126,4 +134,4 @@ comp-spim.c:N:	comp-mips.c
 #	it works only on UNIX and Plan 9.
 
 nuke:EV:	nuke-std
-	rm -f runt.h sysmod.h drawmod.h prefabmod.h tkmod.h mathmod.h keyring.h readimagemod.h loadermod.h freetypemod.h cryptmod.h keyringif.h ipintsmod.h
+	rm -f runt.h sysmod.h drawmod.h prefabmod.h tkmod.h mathmod.h keyring.h readimagemod.h loadermod.h freetypemod.h cryptmod.h keyringif.h ipintsmod.h monoif.h monomod.h
