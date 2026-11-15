@@ -6,6 +6,8 @@ include "arg.m";
 include "keyring.m";
 include "dial.m";
 include "security.m";
+include "monoauth.m";
+	monoauth: Monoauth;
 include "string.m";
 	str: String;
 
@@ -83,8 +85,12 @@ init(nil: ref Draw->Context, argv: list of string)
 		au = load Auth Auth->PATH;
 		if(au == nil)
 			badmodule(Auth->PATH);
-		if (keyfile == nil)
-			keyfile = "/usr/" + user() + "/keyring/default";
+		if (keyfile == nil) {
+			if (alg == "mono")
+				keyfile = "/usr/" + user() + "/keyring/mono";
+			else
+				keyfile = "/usr/" + user() + "/keyring/default";
+		}
 	}
 
 	c := dial->dial(dial->netmkaddr(addr, "tcp", "rstyx"), nil);
@@ -92,7 +98,17 @@ init(nil: ref Draw->Context, argv: list of string)
 		error(sys->sprint("dial %s failed: %r", addr));
 
 	fd := c.dfd;
-	if (doauth) {
+	if (doauth && alg == "mono") {
+		monoauth = load Monoauth Monoauth->PATH;
+		if(monoauth == nil)
+			badmodule(Monoauth->PATH);
+		err: string;
+		(fd, err) = monoauth->client(keyfile, c.dfd);
+		if(fd == nil){
+			sys->fprint(stderr(), "rcmd: authentication failed: %s\n", err);
+			raise "fail:auth failed";
+		}
+	} else if (doauth) {
 		ai := kr->readauthinfo(keyfile);
 		#
 		# let auth->client handle nil ai

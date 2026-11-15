@@ -12,6 +12,8 @@ include "dial.m";
 include "sh.m";
 	sh: Sh;
 	Context: import sh;
+include "monoauth.m";
+	monoauth: Monoauth;
 
 Listen: module {
 	init: fn(nil: ref Draw->Context, argv: list of string);
@@ -25,6 +27,8 @@ badmodule(p: string)
 
 serverkey: ref Keyring->Authinfo;
 verbose := 0;
+mono := 0;
+monokey: string;
 
 init(drawctxt: ref Draw->Context, argv: list of string)
 {
@@ -76,7 +80,17 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	}
 	if (doauth && algs == nil)
 		algs = getalgs();
-	if (algs != nil) {
+	# "mono" uses monoauth(8) (EdDSA + X25519 + XChaCha20-Poly1305)
+	# rather than the keyring certificates and the SSL device.
+	if (algs != nil && len algs == 1 && hd algs == "mono") {
+		mono = 1;
+		if (keyfile == nil)
+			keyfile = "/usr/" + user() + "/keyring/mono";
+		monokey = keyfile;
+		monoauth = load Monoauth Monoauth->PATH;
+		if (monoauth == nil)
+			badmodule(Monoauth->PATH);
+	} else if (algs != nil) {
 		if (keyfile == nil)
 			keyfile = "/usr/" + user() + "/keyring/default";
 		serverkey = keyring->readauthinfo(keyfile);
@@ -181,7 +195,11 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 		sys->dup(ccon.dfd.fd, 0);
 		sys->dup(ccon.dfd.fd, 1);
 		ccon.dfd = ccon.cfd = nil;
-		ctxt.run(cmd, 0);
+		if(verbose)
+			sys->fprint(stderr(), "listen: session start on %s\n", addr);
+		e := ctxt.run(cmd, 0);
+		if(verbose)
+			sys->fprint(stderr(), "listen: session done: %s\n", e);
 		sys->dup(2, 0);
 		sys->dup(2, 1);
 	}
@@ -214,7 +232,10 @@ authenticator(authch: chan of (string, ref Dial->Connection),
 		c: ref Dial->Connection, algs: list of string, addr: string)
 {
 	err: string;
-	(c.dfd, err) = auth->server(algs, serverkey, c.dfd, 0);
+	if(mono)
+		(c.dfd, err) = monoauth->server(monokey, c.dfd);
+	else
+		(c.dfd, err) = auth->server(algs, serverkey, c.dfd, 0);
 	if (c.dfd == nil) {
 		sys->fprint(stderr(), "listen: auth on %s failed: %s\n", addr, err);
 		return;

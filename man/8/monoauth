@@ -1,0 +1,87 @@
+.TH MONOAUTH 8
+.SH NAME
+monoauth \- authenticated, encrypted remote execution with Monocypher
+.SH SYNOPSIS
+.B listen \-a mono
+.I addr command ...
+.br
+.B rcmd \-e mono
+.I addr command ...
+.br
+.B cpu \-C mono
+.I mach command ...
+.SH DESCRIPTION
+.B mono
+is an authentication and transport algorithm for
+.IR listen (1),
+.IR rcmd (1)
+and
+.IR cpu (1).
+It is chosen by name instead of the keyring/SSL algorithms
+.RB ( none ,
+.BR rc4_128 ,
+\&...).
+The key material comes from
+.IR certify (8):
+a signer key in
+.BR /keydb/mono-signer ,
+and one identity file per user,
+.BR /usr/\fIname\fP/keyring/mono ,
+holding a name, a 64-byte EdDSA secret key and a 64-byte certificate.
+.PP
+Both sides send one message:
+.IP
+.EX
+len name || name || pk || cert || ephemeral pk
+.EE
+.IP
+The certificate is an EdDSA signature over
+.IR name || "\en" || pk ,
+verified with the signer's public key (bytes 32 to 64 of
+.BR mono-signer ).
+The ephemeral X25519 keys give a shared secret; BLAKE2b derives one key
+per direction from a transcript of both messages plus the shared
+secret; XChaCha20-Poly1305 protects each record, with a per-direction
+counter as the nonce.
+.PP
+Records are a 4-byte length, a 16-byte tag and the ciphertext.  The
+plaintext side is a file-channel stream, so callers get one file
+descriptor they can read, write and pass to
+.IR export (2).
+.PP
+The authenticated name is passed to the command as
+.B $user
+in the
+.IR listen (1)
+context, exactly as with the keyring algorithms.
+.SH FILES
+.TF /usr/\fIname\fP/keyring/mono
+.TP
+.B /keydb/mono-signer
+EdDSA signer key (private half; root only)
+.TP
+.BI /usr/ name /keyring/mono
+name, secret key and certificate
+.TP
+.B /tmp/mono
+file-channel directory for the plaintext side
+.SH SOURCE
+.B /appl/lib/monoauth.b
+.SH SEE ALSO
+.IR mono (2),
+.IR certify (8),
+.IR listen (1),
+.IR rcmd (1),
+.IR cpu (1)
+.SH BUGS
+The transport is experimental.  A single authenticated session works
+end to end, including a session run as a different user, but a second
+session on the same listener hangs: mounting and exporting the
+file-channel descriptor appears to leak state that wedges the namespace.
+Do not use
+.B \-a mono
+on a service until that is replaced by a kernel device in the style of
+.BR devssl .
+.PP
+There is no forward secrecy beyond the ephemeral exchange, no
+revocation, and no rekeying; the nonce counter space is 2 to the 32.

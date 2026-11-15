@@ -34,12 +34,16 @@ include "sh.m";
 
 include "arg.m";
 
+include "mono.m";
+	mono: Mono;
+
 Certify: module
 {
 	init:	fn(nil: ref Draw->Context, argv: list of string);
 };
 
 SIGNER:	con "/keydb/signerkey";
+MONOSIGNER: con "/keydb/mono-signer";
 KEYDIR:	con "/keyring";
 
 stderr: ref Sys->FD;
@@ -54,6 +58,9 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	kr = load Keyring Keyring->PATH;
 	if(kr == nil)
 		fatal("cannot load " + Keyring->PATH);
+	mono = load Mono Mono->PATH;
+	if(mono == nil)
+		fatal("cannot load " + Mono->PATH);
 	auth = load Auth Auth->PATH;
 	if(auth == nil)
 		fatal("cannot load " + Auth->PATH);
@@ -137,7 +144,31 @@ init_signer(owner: string): int
 		return -1;
 	}
 	sys->print("certify: signer key for %s in %s\n", owner, SIGNER);
+	mono_init_signer();
 	return 0;
+}
+
+# The EdDSA signer key used by monoauth(8); its public half is sk[32:64].
+mono_init_signer()
+{
+	if(statok(MONOSIGNER)){
+		sys->print("certify: %s exists, left alone\n", MONOSIGNER);
+		return;
+	}
+	seed := readrandom(32);
+	if(seed == nil){
+		sys->fprint(stderr, "certify: cannot read /dev/random\n");
+		return;
+	}
+	(sk, nil) := mono->edkeypair(seed);
+	if(sk == nil){
+		sys->fprint(stderr, "certify: cannot make the EdDSA signer key\n");
+		return;
+	}
+	if(puts(MONOSIGNER, "sk " + bytes2hex(sk) + "\n") < 0)
+		sys->fprint(stderr, "certify: cannot write %s: %r\n", MONOSIGNER);
+	else
+		sys->print("certify: EdDSA signer key in %s\n", MONOSIGNER);
 }
 
 user_cert(name, file: string, force: int): int
@@ -179,7 +210,59 @@ user_cert(name, file: string, force: int): int
 		return -1;
 	}
 	sys->print("certify: %s -> %s\n", name, file);
+	mono_user(name, force);
 	return 0;
+}
+
+# EdDSA identity for monoauth(8): name, secret key, certificate.
+mono_user(name: string, force: int)
+{
+	file := "/usr/" + name + KEYDIR + "/mono";
+	if(statok(file) && !force)
+		return;
+	signer := readmonosigner();
+	if(signer == nil)
+		return;
+	seed := readrandom(32);
+	if(seed == nil)
+		return;
+	(sk, pk) := mono->edkeypair(seed);
+	if(sk == nil || pk == nil)
+		return;
+	# edsign signs name || "\n" || pk, binding the name to the key.
+	signed := array[len name + 1 + len pk] of byte;
+	for(i := 0; i < len name; i++)
+		signed[i] = byte name[i];
+	signed[len name] = byte '\n';
+	for(i = 0; i < len pk; i++)
+		signed[len name + 1 + i] = pk[i];
+	cert := mono->edsign(signer, signed);
+	if(cert == nil)
+		return;
+	text := "name " + name + "\n" + "sk " + bytes2hex(sk) + "\n" +
+		"cert " + bytes2hex(cert) + "\n";
+	if(puts(file, text) < 0)
+		sys->fprint(stderr, "certify: cannot write %s: %r\n", file);
+	else
+		sys->print("certify: %s -> %s\n", name, file);
+}
+
+readmonosigner(): array of byte
+{
+	data := readfile(MONOSIGNER);
+	if(data == "")
+		return nil;
+	for(s := data; len s > 0;){
+		(line, rest) := splitline(s);
+		s = rest;
+		(f, v) := splitfield(line);
+		if(f == "sk"){
+			sk := hex2bytes(v);
+			if(len sk == 64)
+				return sk;
+		}
+	}
+	return nil;
 }
 
 # First boot: make the box usable without an operator.  A key that is
@@ -190,6 +273,7 @@ firstboot(force: int)
 	if(!statok(SIGNER))
 		if(init_signer("signer") < 0)
 			return;
+	mono_init_signer();		# in case only the RSA key existed
 	user := trim(readfile("/dev/user"));
 	if(user == "")
 		user = "inferno";
@@ -285,4 +369,78 @@ trim(s: string): string
 	while(len s > 0 && (s[0] == ' ' || s[0] == '\t'))
 		s = s[1:];
 	return s;
+}
+
+# ---- small helpers for the EdDSA identity files ----------------------
+
+readrandom(n: int): array of byte
+{
+	fd := sys->open("/dev/random", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[n] of byte;
+	if(sys->readn(fd, buf, n) != n)
+		return nil;
+	return buf;
+}
+
+puts(path, data: string): int
+{
+	fd := sys->create(path, Sys->OWRITE, 8r600);
+	if(fd == nil)
+		return -1;
+	n := sys->write(fd, array of byte data, len data);
+	fd = nil;
+	if(n != len data)
+		return -1;
+	return 0;
+}
+
+bytes2hex(a: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len a; i++)
+		s += sys->sprint("%.2x", int a[i]);
+	return s;
+}
+
+hexval(c: int): int
+{
+	if(c >= '0' && c <= '9')
+		return c - '0';
+	if(c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if(c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return 0;
+}
+
+hex2bytes(s: string): array of byte
+{
+	a := array[len s / 2] of byte;
+	for(i := 0; i < len a; i++)
+		a[i] = byte ((hexval(s[2*i]) << 4) | hexval(s[2*i+1]));
+	return a;
+}
+
+splitline(s: string): (string, string)
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n')
+			return (s[0:i], s[i+1:]);
+	return (s, "");
+}
+
+splitfield(s: string): (string, string)
+{
+	i := 0;
+	while(i < len s && s[i] != ' ' && s[i] != '\t')
+		i++;
+	key := s[0:i];
+	while(i < len s && (s[i] == ' ' || s[i] == '\t'))
+		i++;
+	val := s[i:];
+	while(len val > 0 && (val[len val-1] == '\r' || val[len val-1] == ' '))
+		val = val[0:len val-1];
+	return (key, val);
 }

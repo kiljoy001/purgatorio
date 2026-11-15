@@ -74,6 +74,7 @@ TARG=\
 	man.dis\
 	memfs.dis\
 	mpeg.dis\
+	monoauth.dis\
 	msgio.dis\
 	nametree.dis\
 	names.dis\
@@ -244,5 +245,6 @@ json.dis: $ROOT/module/json.m
 lists.dis:	$ROOT/module/lists.m
 vac.dis:	$ROOT/module/vac.m $ROOT/module/venti.m
 dial.dis:	$ROOT/module/dial.m
+monoauth.dis:	$ROOT/module/monoauth.m $ROOT/module/mono.m
 styxflush.dis:	$ROOT/module/styxflush.m
 msgio.dis:	$ROOT/module/msgio.m

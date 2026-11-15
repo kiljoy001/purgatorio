@@ -9,6 +9,8 @@ include "string.m";
 include "arg.m";
 include "keyring.m";
 include "security.m";
+include "monoauth.m";
+	monoauth: Monoauth;
 include "dial.m";
 
 DEFCMD:	con "/dis/sh";
@@ -100,15 +102,22 @@ init(nil: ref Draw->Context, argv: list of string)
 
 	if (alg == nil)
 		alg = "none";
-	err := au->init();
-	if(err != nil) {
-		sys->fprint(stderr, "cpu: cannot initialise auth module: %s\n", err);
-		raise "fail:auth init failed";
+	fd: ref Sys->FD;
+	err: string;
+	if (alg == "mono") {
+		monoauth = load Monoauth Monoauth->PATH;
+		if(monoauth == nil)
+			badmodule(Monoauth->PATH);
+		cert = "/usr/" + user + "/keyring/mono";
+		(fd, err) = monoauth->client(cert, c.dfd);
+	} else {
+		err = au->init();
+		if(err != nil) {
+			sys->fprint(stderr, "cpu: cannot initialise auth module: %s\n", err);
+			raise "fail:auth init failed";
+		}
+		(fd, err) = au->client(alg, ai, c.dfd);
 	}
-
-	fd := ref Sys->FD;
-	#sys->fprint(stderr, "cpu: authenticating using alg '%s'\n", alg);		
-	(fd, err) = au->client(alg, ai, c.dfd);
 	if(fd == nil) {
 		sys->fprint(stderr, "cpu: authentication failed: %s\n", err);
 		raise "fail:authentication failure";

@@ -457,6 +457,7 @@ root
 	/dis/lib/devpointer.dis
 	/dis/lib/dhcpclient.dis
 	/dis/lib/dial.dis
+	/dis/lib/monoauth.dis
 	/dis/lib/dialog.dis
 	/dis/lib/dict.dis
 	/dis/lib/dis.dis
