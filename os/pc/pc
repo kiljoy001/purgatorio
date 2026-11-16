@@ -655,6 +655,7 @@ root
 	/dis/mk.dis
 	/dis/mkdir.dis
 	/dis/mntgen.dis
+	/dis/monoca.dis
 	/dis/monotest.dis
 	/dis/mount.dis
 	/dis/mouse.dis

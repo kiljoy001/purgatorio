@@ -104,6 +104,7 @@ TARG=\
 	memfs.dis\
 	metamorph.dis\
 	mkdir.dis\
+	monoca.dis\
 	mntgen.dis\
 	monotest.dis\
 	mount.dis\
