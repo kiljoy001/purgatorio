@@ -1,0 +1,62 @@
+.TH MCHECK 1
+.SH NAME
+mcheck \- independently verify a monoca epoch
+.SH SYNOPSIS
+.B mcheck
+.RI [ name pkhex exp ]
+.SH DESCRIPTION
+.B mcheck
+re-reads
+.BR /keydb/monoca/leaves ,
+.BR /keydb/monoca/epoch ,
+.BR /keydb/monoca/roots/\fIn\fP
+and
+.BR /keydb/mono-signer ,
+then reports:
+.IP \(bu
+whether the epoch record's signature verifies with the signer's public
+half;
+.IP \(bu
+whether the root recomputed from the leaves equals the signed root;
+.IP \(bu
+whether every leaf's inclusion path verifies;
+.IP \(bu
+whether an unenrolled name can be proven absent;
+.IP \(bu
+whether the retained previous epoch verifies;
+.IP \(bu
+negative controls: a corrupted signature and a present leaf offered as
+absent must both fail;
+.IP \(bu
+whether the epoch is fresh against the clock and its window.
+.PP
+With
+.IR "name pkhex exp"
+it also proves that leaf absent, which is how a revoked or rotated key
+is checked.  Each line prints a value and the expected one, so the
+output can be read without knowing the internals.
+.PP
+It shares only the Merkle module with
+.IR monoca (8);
+the parser and the byte layout are written out again on purpose, so
+agreement between the two is evidence that the format is implemented
+as documented.
+.SH FILES
+.TF /keydb/monoca/epoch
+.TP
+.B /keydb/monoca/leaves
+authorised set
+.TP
+.B /keydb/monoca/epoch
+current signed record
+.TP
+.B /keydb/monoca/roots/\fIn\fP
+retained previous records
+.TP
+.B /keydb/mono-signer
+EdDSA signer key
+.SH SOURCE
+.B /appl/cmd/mcheck.b
+.SH SEE ALSO
+.IR monoca (8),
+.IR mono (2)

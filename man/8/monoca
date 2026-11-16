@@ -1,0 +1,115 @@
+.TH MONOCA 8
+.SH NAME
+monoca \- publish the authorised identity set as a signed Merkle root
+.SH SYNOPSIS
+.B monoca
+.B enroll
+.I name pkhex exp
+.br
+.B monoca
+.B revoke
+.I name
+.br
+.B monoca
+.B epoch
+.br
+.B monoca
+.B root
+.SH DESCRIPTION
+.B monoca
+maintains the set of identities a fleet trusts.  Each identity is a
+leaf
+.IP
+.EX
+blake2b("mono1\e0" || name || "\e0" || pk || exp)
+.EE
+.IP
+where
+.I pk
+is the 32-byte EdDSA public key in hex and
+.I exp
+is a Unix time after which the identity is not valid (0 means never).
+The leaves are sorted by hash and folded into a Merkle root, so a
+holder of one leaf can prove membership with an inclusion path, and a
+verifier can prove a key absent with its two neighbouring leaves.  No
+sparse tree and no per-user signature are needed.
+.PP
+Each change re-sorts the leaves, computes the root and signs an epoch
+record:
+.IP
+.EX
+epoch   \fIn\fP
+time    \fIunix seconds\fP
+window  \fIseconds\fP
+root    \fI64 hex chars\fP
+sig     \fI128 hex chars\fP
+.EE
+.IP
+The signature is EdDSA over
+.IP
+.EX
+"epoch1" || \fIn\fP || \fItime\fP || \fIwindow\fP || root
+.EE
+.IP
+with each integer 8 bytes big-endian, so an epoch signature cannot be
+confused with an identity signature.
+.PP
+.B enroll
+adds a leaf.  Re-enrolling a name replaces its previous leaf, so key
+rotation removes the old key from the authorised set rather than
+leaving both valid.
+.B revoke
+removes every leaf for
+.IR name .
+.B epoch
+prints the signed record and
+.B root
+prints the current root in hex.
+.PP
+The record being replaced is retained as
+.BI roots/ n\fR,
+so a token minted in the previous epoch can still be checked during the
+grace window.  A verifier accepts only the current or the previous
+epoch, and only until
+.IR time\ +\ window ;
+without a current record it must fail closed rather than accept a
+stale root.
+.SH FILES
+.TF /keydb/monoca/epoch
+.TP
+.B /keydb/monoca/leaves
+authorised set, one
+.I "name pkhex exp"
+per line
+.TP
+.B /keydb/monoca/epoch
+current signed record
+.TP
+.B /keydb/monoca/root
+current root, for convenience
+.TP
+.B /keydb/monoca/roots/\fIn\fP
+retained previous records
+.TP
+.B /keydb/mono-signer
+EdDSA signer key (private half; root only)
+.SH SOURCE
+.B /appl/cmd/monoca.b
+.SH SEE ALSO
+.IR mcheck (1),
+.IR mono (2),
+.IR monoauth (8),
+.IR certify (8)
+.SH BUGS
+There is no 9P server yet: the records are files under
+.BR /keydb/monoca ,
+not a served file tree, and nothing re-signs on a heartbeat, so an
+idle CA's epoch ages out of its window.  The signer is read from
+.B /keydb/mono-signer
+until
+.I tpm9p
+supplies a sealed key.
+.PP
+An epoch is a full tree rebuild, so enrolling many identities is linear
+in the set size; that is adequate for a fleet and is the first thing to
+replace with an incremental tree if it stops being so.
