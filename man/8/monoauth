@@ -74,14 +74,15 @@ file-channel directory for the plaintext side
 .IR rcmd (1),
 .IR cpu (1)
 .SH BUGS
-The transport is experimental.  A single authenticated session works
-end to end, including a session run as a different user, but a second
-session on the same listener hangs: mounting and exporting the
-file-channel descriptor appears to leak state that wedges the namespace.
-Do not use
-.B \-a mono
-on a service until that is replaced by a kernel device in the style of
-.BR devssl .
+Each connection carries one session for now:
+.I listen
+accepts a session from the link, runs the command, and closes it.  The
+link layer itself multiplexes tagged sessions (OPEN, DATA, FIN) and has
+been exercised with several sessions on one link, but the listener does
+not yet accept more than one session per link, and
+.I rcmd
+opens a fresh link for each invocation.
 .PP
 There is no forward secrecy beyond the ephemeral exchange, no
-revocation, and no rekeying; the nonce counter space is 2 to the 32.
+revocation, no rekeying, and no keepalive; the record counter space is
+2 to the 32.
