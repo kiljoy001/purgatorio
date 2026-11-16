@@ -22,4 +22,14 @@ Merkle: module
 	# recompute the root from a leaf and its path
 	verify:	fn(h: array of byte, path: list of array of byte, i: int,
 		   r: array of byte): int;
+
+	# insertion index of target in the sorted leaves (binary search)
+	insert:	fn(leaves: list of array of byte, target: array of byte): int;
+
+	# proof that target is absent: both neighbours are present and the
+	# target lies strictly between them.  nil means "no neighbour".
+	verifyabsent: fn(target, left: array of byte,
+			lpath: list of array of byte, lidx: int,
+			right: array of byte, rpath: list of array of byte,
+			ridx: int, root: array of byte): int;
 };

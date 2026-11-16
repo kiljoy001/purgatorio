@@ -137,6 +137,58 @@ verify(h: array of byte, path: list of array of byte, i: int, r: array of byte):
 	return mono->equal(h, r);
 }
 
+compare(a, b: array of byte): int
+{
+	n := len a;
+	if(len b < n)
+		n = len b;
+	for(i := 0; i < n; i++){
+		if(a[i] < b[i])
+			return -1;
+		if(a[i] > b[i])
+			return 1;
+	}
+	if(len a < len b)
+		return -1;
+	if(len a > len b)
+		return 1;
+	return 0;
+}
+
+insert(leaves: list of array of byte, target: array of byte): int
+{
+	a := toarray(leaves);
+	lo := 0;
+	hi := len a;
+	while(lo < hi){
+		mid := (lo + hi) / 2;
+		if(compare(a[mid], target) < 0)
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+	return lo;
+}
+
+verifyabsent(target, left: array of byte, lpath: list of array of byte, lidx: int,
+	     right: array of byte, rpath: list of array of byte, ridx: int,
+	     root: array of byte): int
+{
+	if(left != nil){
+		if(compare(left, target) >= 0)
+			return 0;
+		if(!verify(left, lpath, lidx, root))
+			return 0;
+	}
+	if(right != nil){
+		if(compare(target, right) >= 0)
+			return 0;
+		if(!verify(right, rpath, ridx, root))
+			return 0;
+	}
+	return 1;
+}
+
 reverse(l: list of array of byte): list of array of byte
 {
 	r: list of array of byte;
