@@ -75,6 +75,7 @@ TARG=\
 	memfs.dis\
 	mpeg.dis\
 	monoauth.dis\
+	merkle.dis\
 	msgio.dis\
 	nametree.dis\
 	names.dis\
@@ -246,5 +247,6 @@ lists.dis:	$ROOT/module/lists.m
 vac.dis:	$ROOT/module/vac.m $ROOT/module/venti.m
 dial.dis:	$ROOT/module/dial.m
 monoauth.dis:	$ROOT/module/monoauth.m $ROOT/module/mono.m
+merkle.dis:	$ROOT/module/merkle.m $ROOT/module/mono.m
 styxflush.dis:	$ROOT/module/styxflush.m
 msgio.dis:	$ROOT/module/msgio.m
