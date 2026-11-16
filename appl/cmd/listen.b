@@ -31,6 +31,7 @@ mono := 0;
 monokey: string;
 monolink: ref Monoauth->Link;
 montag := 0;
+sesscmd: list of string;
 
 init(drawctxt: ref Draw->Context, argv: list of string)
 {
@@ -112,6 +113,7 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 		arg->usage();
 	arg = nil;
 
+	sesscmd = tl argv;
 	sync := chan[1] of string;
 	spawn listen(drawctxt, hd argv, tl argv, algs,  initscript, sync);
 	e := <-sync;
@@ -235,14 +237,22 @@ authenticator(authch: chan of (string, ref Dial->Connection),
 {
 	err: string;
 	if(mono){
-		(monolink, err) = monoauth->link(monokey, c.dfd, 1);
-		if(monolink == nil){
+		l: ref Monoauth->Link;
+		(l, err) = monoauth->link(monokey, c.dfd, 1);
+		if(l == nil){
 			c.dfd = nil;
 			sys->fprint(stderr(), "listen: mono on %s failed: %s\n", addr, err);
 			return;
 		}
-		(montag, c.dfd) = monoauth->linkaccept(monolink);
-		err = monolink.name;
+		# One link carries any number of tagged sessions; each runs
+		# the command in its own process so they are independent.
+		for(;;){
+			(tag, sfd) := monoauth->linkaccept(l);
+			if(sfd == nil)
+				break;
+			spawn runsession(l, tag, sfd, l.name);
+		}
+		return;
 	} else
 		(c.dfd, err) = auth->server(algs, serverkey, c.dfd, 0);
 	if (c.dfd == nil) {
@@ -252,6 +262,32 @@ authenticator(authch: chan of (string, ref Dial->Connection),
 	if (verbose)
 		sys->fprint(stderr(), "listen: authenticated on %s as %s\n", addr, err);
 	authch <-= (err, c);
+}
+
+# One command per session, in its own namespace and fd group.
+runsession(l: ref Monoauth->Link, tag: int, sfd: ref Sys->FD, user: string)
+{
+    {
+	sys->pctl(Sys->FORKFD|Sys->FORKNS|Sys->FORKENV, nil);
+	sys->dup(sfd.fd, 0);
+	sys->dup(sfd.fd, 1);
+	sys->dup(sfd.fd, 2);
+	sfd = nil;
+	f := sys->create("/env/user", Sys->OWRITE, 8r666);
+	if(f != nil)
+		sys->fprint(f, "%s", user);
+	cmd := sesscmd;
+	if(cmd == nil)
+		cmd = "/dis/sh.dis" :: nil;
+	c := load Command hd cmd;
+	if(c == nil)
+		c = load Command "/dis/" + hd cmd + ".dis";
+	if(c != nil)
+		c->init(nil, cmd);
+	monoauth->linkclose(l, tag);
+    } exception e {
+    "*" => sys->fprint(stderr(), "listen: session %d: %s\n", tag, e);
+    }
 }
 
 stderr(): ref Sys->FD

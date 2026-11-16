@@ -45,9 +45,15 @@ secret; XChaCha20-Poly1305 protects each record, with a per-direction
 counter as the nonce.
 .PP
 Records are a 4-byte length, a 16-byte tag and the ciphertext.  The
-plaintext side is a file-channel stream, so callers get one file
-descriptor they can read, write and pass to
+plaintext inside a record begins with a session tag and a frame type
+(OPEN, DATA, FIN), so one link carries any number of sessions.  Each
+session's plaintext side is one end of a loopback socket pair, giving
+the caller one descriptor to read, write and pass to
 .IR export (2).
+A session is closed with a TCP
+.B hangup
+on that descriptor: dropping the last reference to a socket does not
+signal the peer, but a hangup does, as a reset.
 .PP
 The authenticated name is passed to the command as
 .B $user
@@ -62,9 +68,6 @@ EdDSA signer key (private half; root only)
 .TP
 .BI /usr/ name /keyring/mono
 name, secret key and certificate
-.TP
-.B /tmp/mono
-file-channel directory for the plaintext side
 .SH SOURCE
 .B /appl/lib/monoauth.b
 .SH SEE ALSO
