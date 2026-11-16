@@ -4,8 +4,6 @@ include "sys.m";
 	sys				: Sys;
 
 include "asn1.m";
-include "mono.m";
-	mono: Mono;
 	asn1				: ASN1;
 	Elem, Tag, Value, Oid,
 	Universal, Context,
@@ -117,10 +115,6 @@ init(): string
 	random = load Random Random->PATH;
 	if(random == nil)
 		return sys->sprint("load %s: %r", Random->PATH);
-
-	mono = load Mono Mono->PATH;
-	if(mono == nil)
-		return sys->sprint("load %s: %r", Mono->PATH);
 
 	daytime = load Daytime Daytime->PATH;
 	if(daytime == nil)
@@ -271,9 +265,6 @@ Signed.verify(s: self ref Signed, pk: ref PublicKey, hash: int): int
 		ok = pkcs->dss_verify(s.tobe_signed, s.signature, key.pk);
 	DH =>
 		# simply failure
-	Ed25519 =>
-		# X.509 signs the DER TBSCertificate directly; no digest argument.
-		ok = mono->edcheck(s.signature, key.pk, s.tobe_signed);
 	}
 
 	return ok;

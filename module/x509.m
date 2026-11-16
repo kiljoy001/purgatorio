@@ -157,8 +157,6 @@ X509: module {
 			pk		: ref PKCS->DSSPublicKey;
 		DH =>
 			pk		: ref PKCS->DHPublicKey;
-		Ed25519 =>
-			pk		: array of byte;	# raw 32-byte public key
 		}
 	};
 
