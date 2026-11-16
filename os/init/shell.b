@@ -62,6 +62,7 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 
 	loopback();
 	netstart();
+	setclock();
 	firstboot();
 	svcstart();
 	srv();
@@ -154,6 +155,39 @@ loopback()
 	else
 		sys->print("init: loopback 127.0.0.1\n");
 	ctl = nil;
+}
+
+# The hypervisor gives the guest no RTC, so the clock starts at 1970.
+# Read the host's epoch and set /dev/time, without which every
+# certificate expiry check is meaningless.
+setclock()
+{
+	fd := sys->open("/n/host/time", Sys->OREAD);
+	if(fd == nil){
+		sys->print("init: no /n/host/time; clock left at boot time\n");
+		return;
+	}
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	fd = nil;
+	if(n <= 0)
+		return;
+	s := string buf[0:n];
+	e := big 0;
+	for(i := 0; i < len s && s[i] >= '0' && s[i] <= '9'; i++)
+		e = e*big 10 + big (s[i] - '0');
+	if(e <= big 0)
+		return;
+	cfd := sys->open("/dev/time", Sys->OWRITE);
+	if(cfd == nil){
+		sys->print("init: cannot open /dev/time: %r\n");
+		return;
+	}
+	if(sys->fprint(cfd, "%bd", e * big 1000000) < 0)
+		sys->print("init: cannot set the clock: %r\n");
+	else
+		sys->print("init: clock set from host to %bd\n", e);
+	cfd = nil;
 }
 
 # First boot: create the signer key and the console user's certificate
