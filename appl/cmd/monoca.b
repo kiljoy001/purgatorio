@@ -97,8 +97,8 @@ publish(): int
 		s = nl;
 		if(i == "")
 			continue;
-		(fa, nil) := split(i, 3);
-		if(len fa < 3)
+		(fa, nf) := split(i, 3);
+		if(nf < 3)
 			continue;
 		h := merkle->leaf(fa[0], hex2bytes(fa[1]), int fa[2]);
 		if(h == nil){
@@ -144,10 +144,11 @@ publish(): int
 epochno(): int
 {
 	s := readfile(DIR + "/epoch");
-	if(s == "" || !prefix(s, "epoch "))
+	if(s == "")
 		return 0;
-	(fa, nil) := split(s, 2);
-	if(len fa < 2)
+	(nil, line) := nextline(s);
+	(fa, nf) := split(line, 2);
+	if(nf < 2 || fa[0] != "epoch")
 		return 0;
 	return int fa[1];
 }
@@ -158,8 +159,8 @@ signer(): array of byte
 	for(; len s > 0;){
 		(nl, i) := nextline(s);
 		s = nl;
-		(fa, nil) := split(i, 2);
-		if(len fa >= 2 && fa[0] == "sk"){
+		(fa, nf) := split(i, 2);
+		if(nf >= 2 && fa[0] == "sk"){
 			sk := hex2bytes(fa[1]);
 			if(len sk == 64)
 				return sk;

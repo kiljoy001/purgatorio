@@ -99,6 +99,7 @@ TARG=\
 	man2html.dis\
 	man2txt.dis\
 	mc.dis\
+	mcheck.dis\
 	md5sum.dis\
 	mdb.dis\
 	memfs.dis\
@@ -241,3 +242,5 @@ cleanname.dis: $MODDIR/names.m
 vacfs.dis:	$MODDIR/vac.m $MODDIR/venti.m
 vacget.dis:	$MODDIR/vac.m $MODDIR/venti.m
 vacput.dis:	$MODDIR/vac.m $MODDIR/venti.m
+monoca.dis:	$MODDIR/mono.m $MODDIR/merkle.m
+mcheck.dis:	$MODDIR/mono.m $MODDIR/merkle.m
