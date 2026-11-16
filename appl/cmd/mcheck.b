@@ -1,10 +1,14 @@
 # mcheck -- independently verify a monoca epoch
 #
-# Reads /keydb/monoca/{leaves,epoch} and /keydb/mono-signer, then:
+# Reads /keydb/monoca/{leaves,epoch,roots} and /keydb/mono-signer, then:
 #   - checks the epoch signature with $Mono against the signer's public half
 #   - recomputes the Merkle root from the leaves
 #   - verifies an inclusion path for every leaf
 #   - proves a name absent (the revocation primitive)
+#   - verifies the retained previous epoch, if there is one
+#
+# With arguments "name pkhex exp" it also proves that leaf absent, which
+# is how a revoked key is checked.
 #
 # This shares no code with monoca except the merkle module and the
 # documented byte layout, so agreement is evidence rather than tautology.
@@ -22,13 +26,13 @@ include "daytime.m";
 
 Mcheck: module
 {
-	init:	fn(nil: ref Draw->Context, nil: list of string);
+	init:	fn(nil: ref Draw->Context, argv: list of string);
 };
 
 DIR:	con "/keydb/monoca";
 SIGNER:	con "/keydb/mono-signer";
 
-init(nil: ref Draw->Context, nil: list of string)
+init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	mono = load Mono Mono->PATH;
@@ -44,22 +48,7 @@ init(nil: ref Draw->Context, nil: list of string)
 		sys->print("mcheck: no epoch record\n");
 		return;
 	}
-	n, t, w: int;
-	rroot, sig: array of byte;
-	for(s := ep; len s > 0;){
-		(rest, line) := nextline(s);
-		s = rest;
-		(fa, nf) := split(line, 2);
-		if(nf < 2)
-			continue;
-		case fa[0] {
-		"epoch" =>	n = int fa[1];
-		"time" =>	t = int fa[1];
-		"window" =>	w = int fa[1];
-		"root" =>	rroot = hex2bytes(fa[1]);
-		"sig" =>	sig = hex2bytes(fa[1]);
-		}
-	}
+	(n, t, w, rroot, sig) := parseepoch(ep);
 	if(rroot == nil || sig == nil){
 		sys->print("mcheck: epoch record incomplete\n");
 		return;
@@ -72,21 +61,13 @@ init(nil: ref Draw->Context, nil: list of string)
 	}
 	pub := sk[32:64];
 
-	msg := array[6+8+8+8+32] of byte;
-	for(i := 0; i < 6; i++)
-		msg[i] = byte "epoch1"[i];
-	put8(msg, 6, n);
-	put8(msg, 14, t);
-	put8(msg, 22, w);
-	for(i = 0; i < 32; i++)
-		msg[30+i] = rroot[i];
-
 	now := 0;
 	if(daytime != nil)
 		now = daytime->now();
 	sys->print("epoch %d time %d window %d now %d (fresh %d)\n",
 		n, t, w, now, t <= now && now <= t+w);
-	sys->print("epoch signature: %d (want 1)\n", mono->edcheck(sig, pub, msg));
+	sys->print("epoch signature: %d (want 1)\n",
+		mono->edcheck(sig, pub, epochmsg(n, t, w, rroot)));
 
 	# Recompute the root from the leaves, with the same sort order.
 	leaves := readfile(DIR+"/leaves");
@@ -133,6 +114,17 @@ init(nil: ref Draw->Context, nil: list of string)
 	ab := mk->verifyabsent(cl, left, lpath, idx-1, right, rpath, idx, rroot);
 	sys->print("absence carol: %d (want 1)\n", ab);
 
+	# The previous epoch is retained for the grace window; its signature
+	# must verify with the same signer.
+	prev := readfile(DIR+"/roots/"+string (n-1));
+	if(prev != ""){
+		(pn, pt, pw, pr, ps) := parseepoch(prev);
+		if(pr != nil && ps != nil)
+			sys->print("previous epoch %d signature: %d (want 1)\n",
+				pn, mono->edcheck(ps, pub, epochmsg(pn, pt, pw, pr)));
+	}else
+		sys->print("previous epoch: none\n");
+
 	# Negative controls: a corrupted signature must fail, and a leaf
 	# that is present must not prove absent.
 	bad := array[len sig] of byte;
@@ -140,25 +132,83 @@ init(nil: ref Draw->Context, nil: list of string)
 		bad[k] = sig[k];
 	bad[0] = byte (int bad[0] ^ 1);
 	sys->print("tampered signature: %d (want 0)\n",
-		mono->edcheck(bad, pub, msg));
+		mono->edcheck(bad, pub, epochmsg(n, t, w, rroot)));
 
 	present := arr[0];
 	pi := mk->insert(sl, present);
-	pl, pr: array of byte;
+	pl, pr2: array of byte;
 	plp, prp: list of array of byte;
 	if(pi-1 >= 0){
 		pl = arr[pi-1];
 		plp = mk->path(sl, pi-1);
 	}
 	if(pi < len arr){
-		pr = arr[pi];
+		pr2 = arr[pi];
 		prp = mk->path(sl, pi);
 	}
 	sys->print("present as absent: %d (want 0)\n",
-		mk->verifyabsent(present, pl, plp, pi-1, pr, prp, pi, rroot));
+		mk->verifyabsent(present, pl, plp, pi-1, pr2, prp, pi, rroot));
+
+	# Optional: prove a named leaf absent (a revoked key).
+	if(args != nil && tl args != nil){
+		rest := tl args;
+		if(rest != nil && tl rest != nil && tl tl rest != nil){
+			an := hd rest;
+			apk := hex2bytes(hd tl rest);
+			ae := int hd tl tl rest;
+			ah := mk->leaf(an, apk, ae);
+			ai := mk->insert(sl, ah);
+			ol, orr: array of byte;
+			olp, orp: list of array of byte;
+			if(ai-1 >= 0){
+				ol = arr[ai-1];
+				olp = mk->path(sl, ai-1);
+			}
+			if(ai < len arr){
+				orr = arr[ai];
+				orp = mk->path(sl, ai);
+			}
+			sys->print("absence %s: %d (want 1)\n", an,
+				mk->verifyabsent(ah, ol, olp, ai-1, orr, orp, ai, rroot));
+		}
+	}
 }
 
 # ---- helpers ---------------------------------------------------------
+
+parseepoch(rec: string): (int, int, int, array of byte, array of byte)
+{
+	n, t, w: int;
+	r, sg: array of byte;
+	for(s := rec; len s > 0;){
+		(rest, line) := nextline(s);
+		s = rest;
+		(fa, nf) := split(line, 2);
+		if(nf < 2)
+			continue;
+		case fa[0] {
+		"epoch" =>	n = int fa[1];
+		"time" =>	t = int fa[1];
+		"window" =>	w = int fa[1];
+		"root" =>	r = hex2bytes(fa[1]);
+		"sig" =>	sg = hex2bytes(fa[1]);
+		}
+	}
+	return (n, t, w, r, sg);
+}
+
+epochmsg(n, t, w: int, r: array of byte): array of byte
+{
+	msg := array[6+8+8+8+len r] of byte;
+	for(i := 0; i < 6; i++)
+		msg[i] = byte "epoch1"[i];
+	put8(msg, 6, n);
+	put8(msg, 14, t);
+	put8(msg, 22, w);
+	for(i = 0; i < len r; i++)
+		msg[30+i] = r[i];
+	return msg;
+}
 
 signerkey(): array of byte
 {

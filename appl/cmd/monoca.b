@@ -53,6 +53,8 @@ init(nil: ref Draw->Context, args: list of string)
 	case cmd {
 	"enroll" =>
 		enroll(rest);
+	"revoke" =>
+		revoke(rest);
 	"epoch" =>
 		cat(DIR + "/epoch");
 	"root" =>
@@ -64,10 +66,12 @@ init(nil: ref Draw->Context, args: list of string)
 
 usage()
 {
-	sys->fprint(sys->fildes(2), "usage: monoca enroll name pkhex exp | epoch | root\n");
+	sys->fprint(sys->fildes(2), "usage: monoca enroll name pkhex exp | revoke name | epoch | root\n");
 }
 
-# enroll appends a leaf and publishes a new epoch.
+# enroll adds a leaf and publishes a new epoch.  Re-enrolling a name
+# replaces its old leaf, so key rotation removes the old key from the
+# authorised set instead of leaving both valid.
 enroll(args: list of string): int
 {
 	if(len args < 3){
@@ -83,7 +87,23 @@ enroll(args: list of string): int
 	}
 	mkdir(DIR);
 	old := readfile(DIR + "/leaves");
-	writefile(DIR + "/leaves", old + name + " " + pkhex + " " + string exp + "\n");
+	writefile(DIR + "/leaves",
+		dropname(old, name) + name + " " + pkhex + " " + string exp + "\n");
+	return publish();
+}
+
+# revoke removes every leaf for a name.  The next root no longer
+# includes it, so a neighbour proof shows the key absent.
+revoke(args: list of string): int
+{
+	if(len args < 1){
+		usage();
+		return -1;
+	}
+	name := hd args;
+	mkdir(DIR);
+	old := readfile(DIR + "/leaves");
+	writefile(DIR + "/leaves", dropname(old, name));
 	return publish();
 }
 
@@ -135,6 +155,15 @@ publish(): int
 	rec := "epoch " + string n + "\n" + "time " + string t + "\n" +
 		"window " + string WINDOW + "\n" + "root " + rh + "\n" +
 		"sig " + bytes2hex(sig) + "\n";
+	# Keep the record this one replaces, so a verifier can still check a
+	# token minted in the previous epoch during the grace window.
+	mkdir(DIR + "/roots");
+	on := epochno();
+	if(on > 0){
+		orec := readfile(DIR + "/epoch");
+		if(orec != "")
+			writefile(DIR + "/roots/" + string on, orec);
+	}
 	writefile(DIR + "/epoch", rec);
 	writefile(DIR + "/root", rh + "\n");
 	sys->print("monoca: epoch %d root %s\n", n, rh);
@@ -170,6 +199,23 @@ signer(): array of byte
 }
 
 # ---- helpers ---------------------------------------------------------
+
+# dropname returns the leaves file without any line whose first field
+# is name.
+dropname(s, name: string): string
+{
+	out := "";
+	for(; len s > 0;){
+		(rest, line) := nextline(s);
+		s = rest;
+		(fa, nf) := split(line, 3);
+		if(nf >= 1 && fa[0] == name)
+			continue;
+		if(line != "")
+			out += line + "\n";
+	}
+	return out;
+}
 
 sorted(l: list of array of byte): list of array of byte
 {
