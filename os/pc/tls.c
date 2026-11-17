@@ -30,6 +30,9 @@ typedef struct TLSConn TLSConn;
 struct TLSConn {
 	int		used;
 	int		fd;
+	unsigned char	*pre;		/* bytes already read off fd */
+	int		prelen;
+	int		preoff;
 	unsigned char	*iobuf;
 	unsigned char	*cert;
 	size_t		certlen;
@@ -108,6 +111,14 @@ tlsrecv(void *ctx, unsigned char *buf, size_t len)
 	long n;
 
 	c = ctx;
+	if(c->preoff < c->prelen){
+		n = c->prelen - c->preoff;
+		if(n > len)
+			n = len;
+		memcpy(buf, c->pre + c->preoff, n);
+		c->preoff += n;
+		return (int)n;
+	}
 	release();
 	n = kread(c->fd, buf, len);
 	acquire();
@@ -137,6 +148,7 @@ freeconn(TLSConn *c)
 	if(c == nil)
 		return;
 	free(c->iobuf);
+	free(c->pre);
 	free(c->cert);
 	free(c->key);
 	memset(c, 0, sizeof *c);
@@ -427,45 +439,57 @@ certgen(char *cn, char *notbefore, char *notafter,
 /* ---------------------------------------------------------------- */
 /* Limbo interface                                                   */
 
-void
-TLS_accept(void *fp)
+/* Common part of accept and acceptpre.  pre, if not nil, holds bytes
+ * already consumed from fd (a peeked ClientHello) which tlsrecv replays
+ * before reading the socket again. */
+static void
+acceptconn(int fd, Array *certarr, Array *keyarr, Array *pre,
+	int *reth, String **reterr)
 {
-	F_TLS_accept *f;
 	TLSConn *c;
 	int h;
 
-	f = fp;
-	f->ret->t0 = -1;
-	f->ret->t1 = H;
-	seterr(&f->ret->t1, nil);
-	if(f->cert == H || f->key == H || f->key->len != KEYLEN){
-		seterr(&f->ret->t1, "tls: cert/key missing or key is not 32 bytes");
+	*reth = -1;
+	*reterr = H;
+	if(certarr == H || keyarr == H || keyarr->len != KEYLEN){
+		seterr(reterr, "tls: cert/key missing or key is not 32 bytes");
 		return;
 	}
 	h = newconn();
 	if(h < 0){
-		seterr(&f->ret->t1, "tls: too many connections");
+		seterr(reterr, "tls: too many connections");
 		return;
 	}
 	c = mallocz(sizeof *c, 1);
 	if(c == nil){
-		seterr(&f->ret->t1, "tls: out of memory");
+		seterr(reterr, "tls: out of memory");
 		return;
 	}
 	c->iobuf = malloc(BR_SSL_BUFSIZE_BIDI);
-	c->cert = malloc(f->cert->len);
+	c->cert = malloc(certarr->len);
 	c->key = malloc(KEYLEN);
 	if(c->iobuf == nil || c->cert == nil || c->key == nil){
 		freeconn(c);
 		free(c);
-		seterr(&f->ret->t1, "tls: out of memory");
+		seterr(reterr, "tls: out of memory");
 		return;
 	}
-	memcpy(c->cert, f->cert->data, f->cert->len);
-	memcpy(c->key, f->key->data, KEYLEN);
-	c->certlen = f->cert->len;
+	if(pre != H && pre->len > 0){
+		c->pre = malloc(pre->len);
+		if(c->pre == nil){
+			freeconn(c);
+			free(c);
+			seterr(reterr, "tls: out of memory");
+			return;
+		}
+		memcpy(c->pre, pre->data, pre->len);
+		c->prelen = pre->len;
+	}
+	memcpy(c->cert, certarr->data, certarr->len);
+	memcpy(c->key, keyarr->data, KEYLEN);
+	c->certlen = certarr->len;
 	c->keylen = KEYLEN;
-	c->fd = f->fd;
+	c->fd = fd;
 	c->chain.data = c->cert;
 	c->chain.data_len = c->certlen;
 	c->sk.curve = BR_EC_secp256r1;
@@ -495,7 +519,25 @@ TLS_accept(void *fp)
 
 	c->used = 1;
 	conns[h] = c;
-	f->ret->t0 = h;
+	*reth = h;
+}
+
+void
+TLS_accept(void *fp)
+{
+	F_TLS_accept *f;
+
+	f = fp;
+	acceptconn(f->fd, f->cert, f->key, H, &f->ret->t0, &f->ret->t1);
+}
+
+void
+TLS_acceptpre(void *fp)
+{
+	F_TLS_acceptpre *f;
+
+	f = fp;
+	acceptconn(f->fd, f->cert, f->key, f->pre, &f->ret->t0, &f->ret->t1);
 }
 
 void
@@ -514,6 +556,7 @@ TLS_read(void *fp)
 		*f->ret = 0;
 		return;
 	}
+	n = br_sslio_read(&c->ioc, f->buf->data, f->buf->len);
 	*f->ret = n;
 }
 

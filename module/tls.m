@@ -15,6 +15,12 @@ TLS: module
 	accept:	fn(fd: int, cert: array of byte, key: array of byte):
 		(int, string);
 
+	# Like accept, but pre holds bytes already read off fd.  The
+	# caller can peek at a ClientHello, then hand those bytes back
+	# so the session sees an unbroken record stream.
+	acceptpre: fn(fd: int, cert: array of byte, key: array of byte,
+		pre: array of byte): (int, string);
+
 	read:	fn(h: int, buf: array of byte): int;
 	write:	fn(h: int, buf: array of byte): int;
 	close:	fn(h: int);

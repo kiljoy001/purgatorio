@@ -3,8 +3,13 @@
 #
 #  The control plane is an append-only file on /n/host (a 9P mount of
 #  the host tree).  This program follows the file, applies title/text/
-#  set/del/clear commands, and serves the synthesized page over TLS
-#  1.2 using $TLS.  The certificate and key are kept in /keydb.
+#  set/del/clear commands, and serves the synthesized page over TLS.
+#
+#  Each connection is peeked at before the handshake: TLS 1.3
+#  (supported_versions 0x0304) is handled in Dis using $TLS's
+#  gcmseal/gcmopen/sign primitives and $Mono's X25519, while anything
+#  else is replayed into the kernel's BearSSL TLS 1.2 session via
+#  $TLS->acceptpre.  The certificate and key are kept in /keydb.
 #
 implement Gemserve;
 
@@ -17,6 +22,11 @@ include "dial.m";
 	dial: Dial;
 include "tls.m";
 	tls: TLS;
+include "ipints.m";
+include "crypt.m";
+	crypt: Crypt;
+include "mono.m";
+	mono: Mono;
 
 Gemserve: module
 {
@@ -41,6 +51,22 @@ State: adt
 st: ref State;
 cert: array of byte;
 key: array of byte;
+pkraw: array of byte;		# bytes read while peeking at a connection
+pkhs: array of byte;		# handshake payload from those bytes
+
+# Byte readers and builders used by the TLS 1.3 path.
+Rd: adt
+{
+	d:	array of byte;
+	n:	int;
+	o:	int;
+};
+
+Bo: adt
+{
+	d:	array of byte;
+	n:	int;
+};
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -50,7 +76,10 @@ init(nil: ref Draw->Context, args: list of string)
 	daytime = load Daytime Daytime->PATH;
 	dial = load Dial Dial->PATH;
 	tls = load TLS TLS->PATH;
-	if(daytime == nil || dial == nil || tls == nil){
+	crypt = load Crypt Crypt->PATH;
+	mono = load Mono Mono->PATH;
+	if(daytime == nil || dial == nil || tls == nil ||
+	   crypt == nil || mono == nil){
 		sys->fprint(sys->fildes(2), "gemserve: cannot load a module: %r\n");
 		return;
 	}
@@ -86,7 +115,11 @@ init(nil: ref Draw->Context, args: list of string)
 		fd := dial->accept(srv);
 		if(fd == nil)
 			continue;
-		serve(fd);
+		k := peekhello(fd);
+		if(k == 1)
+			serve13(fd, pkhs);
+		else if(k == 0)
+			serve12(fd, pkraw);
 		fd = nil;
 	}
 
@@ -296,9 +329,9 @@ page(): string
 	return s;
 }
 
-serve(fd: ref Sys->FD)
+serve12(fd: ref Sys->FD, pre: array of byte)
 {
-	(h, err) := tls->accept(fd.fd, cert, key);
+	(h, err) := tls->acceptpre(fd.fd, cert, key, pre);
 	if(h < 0){
 		sys->fprint(sys->fildes(2), "gemserve: tls: %s\n", err);
 		return;
@@ -306,8 +339,705 @@ serve(fd: ref Sys->FD)
 	buf := array[1024] of byte;
 	n := tls->read(h, buf);
 	if(n > 0)
-		sys->print("gemserve: request %s\n", string buf[0:n]);
+		sys->print("gemserve: (tls1.2) request %s\n", string buf[0:n]);
 	resp := "20 text/gemini\r\n" + page();
 	tls->write(h, array of byte resp);
 	tls->close(h);
+}
+
+# ---- version peek -----------------------------------------------------
+
+# Read just enough of the connection to tell 1.3 from 1.2, keeping the
+# bytes in pkraw (record stream) and pkhs (handshake payload).  Returns
+# 1 for TLS 1.3, 0 for anything else, -1 on a broken connection.
+peekhello(fd: ref Sys->FD): int
+{
+	raw := array[8192] of byte;
+	hs := array[8192] of byte;
+	rawn := 0;
+	hsn := 0;
+	for(rec := 0; rec < 4; rec++){
+		h := array[5] of byte;
+		if(readn(fd, h, 5) != 5)
+			return -1;
+		rl := (int h[3] << 8) | int h[4];
+		if(rl <= 0 || rl > 4096 || rawn + 5 + rl > len raw || hsn + rl > len hs)
+			break;
+		d := array[rl] of byte;
+		if(readn(fd, d, rl) != rl)
+			return -1;
+		for(i := 0; i < 5; i++){
+			raw[rawn] = h[i];
+			rawn++;
+		}
+		for(i = 0; i < rl; i++){
+			raw[rawn] = d[i];
+			rawn++;
+		}
+		if(int h[0] != 22)
+			break;
+		for(i = 0; i < rl; i++){
+			hs[hsn] = d[i];
+			hsn++;
+		}
+		if(hsn >= 4){
+			if(int hs[0] != 1)
+				break;
+			ml := (int hs[1] << 16) | (int hs[2] << 8) | int hs[3];
+			if(4 + ml <= hsn)
+				break;
+		}
+	}
+	if(rawn == 0)
+		return -1;
+	pkraw = raw[0:rawn];
+	pkhs = hs[0:hsn];
+	if(is13(pkhs))
+		return 1;
+	return 0;
+}
+
+# Does this ClientHello offer TLS 1.3?
+is13(hs: array of byte): int
+{
+	if(len hs < 4 || int hs[0] != 1)
+		return 0;
+	ml := (int hs[1] << 16) | (int hs[2] << 8) | int hs[3];
+	if(4 + ml > len hs)
+		return 0;
+	r := ref Rd(hs, 4 + ml, 4);
+	rd16(r);			# legacy_version
+	rdbytes(r, 32);			# random
+	sl := rd8(r);
+	if(sl < 0)
+		return 0;
+	rdbytes(r, sl);
+	cl := rd16(r);
+	if(cl < 0)
+		return 0;
+	rdbytes(r, cl);
+	cm := rd8(r);
+	if(cm < 0)
+		return 0;
+	rdbytes(r, cm);
+	el := rd16(r);
+	if(el < 0)
+		return 0;
+	exts := rdbytes(r, el);
+	if(exts == nil)
+		return 0;
+	er := ref Rd(exts, len exts, 0);
+	while(er.o + 4 <= er.n){
+		et := rd16(er);
+		eln := rd16(er);
+		ed := rdbytes(er, eln);
+		if(ed == nil)
+			break;
+		if(et == 43){
+			if(len ed < 1)
+				return 0;
+			n := int ed[0];
+			for(i := 1; i + 1 < 1 + n && i + 1 < len ed; i += 2)
+				if((int ed[i] << 8 | int ed[i+1]) == 16r0304)
+					return 1;
+			return 0;
+		}
+	}
+	return 0;
+}
+
+# ---- TLS 1.3 ---------------------------------------------------------
+
+serve13(fd: ref Sys->FD, hello: array of byte)
+{
+	# ---- ClientHello (already read by peekhello) ----
+	r := ref Rd(hello, len hello, 0);
+	if(rd8(r) != 1){
+		sys->print("tls13: no ClientHello\n");
+		return;
+	}
+	ln := rd24(r);
+	body := rdbytes(r, ln);
+	if(body == nil){
+		sys->print("tls13: short ClientHello\n");
+		return;
+	}
+	ch := ref Rd(body, len body, 0);
+	rd16(ch);			# legacy_version
+	rdbytes(ch, 32);		# random
+	sess := rdbytes(ch, rd8(ch));
+	cs := rdbytes(ch, rd16(ch));
+	rdbytes(ch, rd8(ch));		# compression
+	extlen := rd16(ch);
+	exts := rdbytes(ch, extlen);
+
+	if(!has1301(cs)){
+		alert(fd, 40);
+		return;
+	}
+	clientpub: array of byte;
+	gotver := 0;
+	gotecdsa := 0;
+	er := ref Rd(exts, len exts, 0);
+	while(er.o < er.n){
+		et := rd16(er);
+		el := rd16(er);
+		ed := rdbytes(er, el);
+		if(ed == nil)
+			break;
+		case et {
+		43 =>	# supported_versions
+			gotver = hasver(ed, 16r0304);
+		51 =>	# key_share
+			clientpub = findgroup(ed, 29);
+		13 =>	# signature_algorithms
+			gotecdsa = hassig(ed, 16r0403);
+		}
+	}
+	if(!gotver || !gotecdsa || clientpub == nil){
+		sys->print("tls13: no 1.3/x25519/ecdsa\n");
+		alert(fd, 40);
+		return;
+	}
+
+	# ---- ServerHello ----
+	sk := randombytes(32);
+	if(sk == nil){
+		alert(fd, 80);
+		return;
+	}
+	spub := mono->xpublic(sk);
+	if(spub == nil){
+		alert(fd, 80);
+		return;
+	}
+
+	shb := ref Bo(array[256] of byte, 0);
+	b16(shb, 16r0303);
+	bpa(shb, randombytes(32));
+	bp(shb, len sess);
+	bpa(shb, sess);
+	b16(shb, 16r1301);
+	bp(shb, 0);
+	ext := ref Bo(array[128] of byte, 0);
+	b16(ext, 43); b16(ext, 2); b16(ext, 16r0304);
+	b16(ext, 51); b16(ext, 36); b16(ext, 29); b16(ext, 32); bpa(ext, spub);
+	b16(shb, ext.n);
+	bpa(shb, ext.d[0:ext.n]);
+	sh := hsmsg(2, shb.d[0:shb.n]);
+
+	# transcript = ClientHello message (type+len+body) || ServerHello
+	chmsg := hsmsg(1, body);
+	tr := array[16384] of byte;
+	tlen := 0;
+	tlen = tapp(tr, tlen, chmsg);
+	tlen = tapp(tr, tlen, sh);
+
+	if(writeall(fd, hsrec(sh)) < 0){
+		sys->print("tls13: write SH: %r\n");
+		return;
+	}
+	ccs := array[6] of byte;
+	ccs[0] = byte 20; ccs[1] = byte 3; ccs[2] = byte 3;
+	ccs[3] = byte 0; ccs[4] = byte 1; ccs[5] = byte 1;
+	writeall(fd, ccs);
+
+	# ---- key schedule ----
+	shared := mono->x25519(sk, clientpub);
+	if(shared == nil){
+		alert(fd, 40);
+		return;
+	}
+	for(i := 0; i < 32; i++)
+		if(shared[i] != byte 0)
+			break;
+	if(i == 32){
+		alert(fd, 40);
+		return;
+	}
+	empty := array[0] of byte;
+	zeros := array[32] of byte;
+	for(i = 0; i < 32; i++)
+		zeros[i] = byte 0;
+	emptyhash := sha256(empty);
+	early := hkdfextract(zeros, zeros);
+	derived := derivsec(early, "derived", emptyhash);
+	hssec := hkdfextract(derived, shared);
+	th := sha256(tr[0:tlen]);
+	chs := derivsec(hssec, "c hs traffic", th);
+	shs := derivsec(hssec, "s hs traffic", th);
+	chsk := hkexp(chs, "key", empty, 16);
+	chsiv := hkexp(chs, "iv", empty, 12);
+	shsk := hkexp(shs, "key", empty, 16);
+	shsiv := hkexp(shs, "iv", empty, 12);
+
+	# ---- encrypted flight ----
+	eeb := ref Bo(array[8] of byte, 0);
+	b16(eeb, 0);
+	ee := hsmsg(8, eeb.d[0:eeb.n]);
+	tlen = tapp(tr, tlen, ee);
+
+	certb := ref Bo(array[1024] of byte, 0);
+	bp(certb, 0);
+	entry := ref Bo(array[1024] of byte, 0);
+	b24(entry, len cert);
+	bpa(entry, cert);
+	b16(entry, 0);
+	b24(certb, entry.n);
+	bpa(certb, entry.d[0:entry.n]);
+	cm := hsmsg(11, certb.d[0:certb.n]);
+	tlen = tapp(tr, tlen, cm);
+
+	thcv := sha256(tr[0:tlen]);
+	ctx := "TLS 1.3, server CertificateVerify";
+	cvmsg := ref Bo(array[512] of byte, 0);
+	for(i = 0; i < 64; i++)
+		bp(cvmsg, 16r20);
+	bpa(cvmsg, array of byte ctx);
+	bp(cvmsg, 0);
+	bpa(cvmsg, thcv);
+	sig := tls->sign(key, cvmsg.d[0:cvmsg.n]);
+	if(sig == nil){
+		alert(fd, 80);
+		return;
+	}
+	cvb := ref Bo(array[512] of byte, 0);
+	b16(cvb, 16r0403);
+	b16(cvb, len sig);
+	bpa(cvb, sig);
+	cv := hsmsg(15, cvb.d[0:cvb.n]);
+	tlen = tapp(tr, tlen, cv);
+
+	thfin := sha256(tr[0:tlen]);
+	fk := hkexp(shs, "finished", empty, 32);
+	fv := hmac(fk, thfin);
+	fin := hsmsg(20, fv);
+	tlen = tapp(tr, tlen, fin);
+
+	flight := cat(cat(ee, cm), cat(cv, fin));
+
+	# application secrets use the transcript through server Finished
+	derived2 := derivsec(hssec, "derived", emptyhash);
+	master := hkdfextract(derived2, zeros);
+	thapp := sha256(tr[0:tlen]);
+	(rec, err) := sealrec(fd, 22, flight, shsk, shsiv, 0);
+	if(err != nil){
+		sys->print("tls13: seal flight: %s\n", err);
+		return;
+	}
+	if(writeall(fd, rec) < 0)
+		return;
+
+	# ---- client Finished ----
+	ctyp: int;
+	cdata: array of byte;
+	e: string;
+	(ctyp, cdata, e) = readenc(fd, chsk, chsiv, 0);
+	if(e != nil){
+		sys->print("tls13: client finished: %s\n", e);
+		return;
+	}
+	if(ctyp != 22){
+		sys->print("tls13: client sent type %d, want handshake\n", ctyp);
+		return;
+	}
+	cr := ref Rd(cdata, len cdata, 0);
+	if(rd8(cr) != 20){
+		sys->print("tls13: no client Finished\n");
+		return;
+	}
+	cln := rd24(cr);
+	cfin := rdbytes(cr, cln);
+	if(cfin == nil){
+		sys->print("tls13: short client Finished\n");
+		return;
+	}
+	cfk := hkexp(chs, "finished", empty, 32);
+	want := hmac(cfk, sha256(tr[0:tlen]));
+	if(!eq(want, cfin)){
+		sys->print("tls13: bad client Finished\n");
+		alert(fd, 20);
+		return;
+	}
+	tlen = tapp(tr, tlen, hsmsg(20, cfin));
+
+	# ---- application keys ----
+	capp := derivsec(master, "c ap traffic", thapp);
+	sapp := derivsec(master, "s ap traffic", thapp);
+	cakk := hkexp(capp, "key", empty, 16);
+	caiv := hkexp(capp, "iv", empty, 12);
+	sakk := hkexp(sapp, "key", empty, 16);
+	saiv := hkexp(sapp, "iv", empty, 12);
+
+	atyp: int;
+	adata: array of byte;
+	(atyp, adata, e) = readenc(fd, cakk, caiv, 0);
+	if(e != nil){
+		sys->print("tls13: app read: %s\n", e);
+		return;
+	}
+	if(atyp != 23){
+		sys->print("tls13: inner type %d, want app\n", atyp);
+		return;
+	}
+	if(len adata > 0)
+		sys->print("gemserve: (tls1.3) request %s\n", string adata);
+	resp := "20 text/gemini\r\n" + page();
+	rrec: array of byte;
+	(rrec, err) = sealrec(fd, 23, array of byte resp, sakk, saiv, 0);
+	if(err != nil)
+		return;
+	writeall(fd, rrec);
+
+	# close_notify, so the client sees a clean end of stream
+	cn := array[2] of byte;
+	cn[0] = byte 1;
+	cn[1] = byte 0;
+	(rrec, err) = sealrec(fd, 21, cn, sakk, saiv, 1);
+	if(err == nil)
+		writeall(fd, rrec);
+}
+
+
+# ---- records ---------------------------------------------------------
+
+hsrec(msg: array of byte): array of byte
+{
+	b := ref Bo(array[16384] of byte, 0);
+	bp(b, 22);
+	b16(b, 16r0303);
+	b16(b, len msg);
+	bpa(b, msg);
+	return b.d[0:b.n];
+}
+
+sealrec(fd: ref Sys->FD, inner: int, data: array of byte,
+	key, iv: array of byte, seq: int): (array of byte, string)
+{
+	b := ref Bo(array[16384] of byte, 0);
+	bpa(b, data);
+	bp(b, inner);
+	nonce := mkn(iv, seq);
+	hdr := ref Bo(array[8] of byte, 0);
+	bp(hdr, 23);
+	b16(hdr, 16r0303);
+	b16(hdr, len b.d[0:b.n] + 16);
+	cipher := tls->gcmseal(key, nonce, hdr.d[0:hdr.n], b.d[0:b.n]);
+	if(cipher == nil)
+		return (nil, "gcm seal failed");
+	out := ref Bo(array[16384] of byte, 0);
+	bpa(out, hdr.d[0:hdr.n]);
+	bpa(out, cipher);
+	return (out.d[0:out.n], nil);
+}
+
+
+readenc(fd: ref Sys->FD, key, iv: array of byte, seq: int): (int, array of byte, string)
+{
+	h := array[5] of byte;
+	for(;;){
+		if(readn(fd, h, 5) != 5)
+			return (-1, nil, "short record header");
+		n := (int h[3] << 8) | int h[4];
+		if(n <= 0 || n > 16384)
+			return (-1, nil, "bad record length");
+		d := array[n] of byte;
+		if(readn(fd, d, n) != n)
+			return (-1, nil, "short record");
+		if(int h[0] == 20)	# compatibility CCS
+			continue;
+		if(int h[0] != 23)
+			return (-1, nil, "unexpected record type");
+		nonce := mkn(iv, seq);
+		p := tls->gcmopen(key, nonce, h, d);
+		if(p == nil)
+			return (-1, nil, "bad record tag");
+		i := len p - 1;
+		while(i >= 0 && p[i] == byte 0)
+			i--;
+		if(i < 0)
+			return (-1, nil, "empty plaintext");
+		return (int p[i], p[0:i], nil);
+	}
+}
+
+mkn(iv: array of byte, seq: int): array of byte
+{
+	n := array[12] of byte;
+	for(i := 0; i < 12; i++)
+		n[i] = iv[i];
+	# XOR the sequence number, big-endian, into the last four
+	# bytes.  Shifts of 32 or more are undefined here, so a session
+	# would have to send 2^32 records before this wraps.
+	n[11] = byte (int n[11] ^ (seq & 16rff));
+	n[10] = byte (int n[10] ^ ((seq >> 8) & 16rff));
+	n[9] = byte (int n[9] ^ ((seq >> 16) & 16rff));
+	n[8] = byte (int n[8] ^ ((seq >> 24) & 16rff));
+	return n;
+}
+
+# ---- TLS 1.3 key schedule --------------------------------------------
+
+hkdfextract(salt, ikm: array of byte): array of byte
+{
+	return hmac(salt, ikm);
+}
+
+hkexp(secret: array of byte, label: string, ctx: array of byte, l: int): array of byte
+{
+	full := "tls13 " + label;
+	info := ref Bo(array[128] of byte, 0);
+	bp(info, l >> 8);
+	bp(info, l & 16rff);
+	bp(info, len full);
+	bpa(info, array of byte full);
+	bp(info, len ctx);
+	bpa(info, ctx);
+	return hkdfexpand(secret, info.d[0:info.n], l);
+}
+
+hkdfexpand(prk, info: array of byte, l: int): array of byte
+{
+	out := array[l] of byte;
+	t := array[0] of byte;
+	n := 0;
+	i := 1;
+	while(n < l){
+		m := cat(t, info);
+		one := array[1] of byte;
+		one[0] = byte i;
+		t = hmac(prk, cat(m, one));
+		for(j := 0; j < len t && n < l; j++){
+			out[n] = t[j];
+			n++;
+		}
+		i++;
+	}
+	return out;
+}
+
+derivsec(secret: array of byte, label: string, th: array of byte): array of byte
+{
+	return hkexp(secret, label, th, 32);
+}
+
+hmac(key, msg: array of byte): array of byte
+{
+	k := key;
+	if(len k > 64)
+		k = sha256(k);
+	ip := array[64] of byte;
+	op := array[64] of byte;
+	for(i := 0; i < 64; i++){
+		b := 0;
+		if(i < len k)
+			b = int k[i];
+		ip[i] = byte (b ^ 16r36);
+		op[i] = byte (b ^ 16r5c);
+	}
+	return sha256(cat(op, sha256(cat(ip, msg))));
+}
+
+sha256(d: array of byte): array of byte
+{
+	out := array[32] of byte;
+	crypt->sha256(d, len d, out, nil);
+	return out;
+}
+
+# ---- handshake helpers ------------------------------------------------
+
+hsmsg(typ: int, body: array of byte): array of byte
+{
+	b := ref Bo(array[16384] of byte, 0);
+	bp(b, typ);
+	b24(b, len body);
+	bpa(b, body);
+	return b.d[0:b.n];
+}
+
+has1301(cs: array of byte): int
+{
+	for(i := 0; i + 1 < len cs; i += 2)
+		if(int cs[i] == 16r13 && int cs[i+1] == 1)
+			return 1;
+	return 0;
+}
+
+hasver(d: array of byte, v: int): int
+{
+	if(len d < 3)
+		return 0;
+	n := int d[0];
+	for(i := 0; i < n; i += 2)
+		if(i + 1 < len d && ((int d[1+i] << 8) | int d[2+i]) == v)
+			return 1;
+	return 0;
+}
+
+hassig(d: array of byte, s: int): int
+{
+	if(len d < 2)
+		return 0;
+	n := (int d[0] << 8) | int d[1];
+	for(i := 0; i + 1 < n && i + 3 < len d; i += 2)
+		if(((int d[2+i] << 8) | int d[3+i]) == s)
+			return 1;
+	return 0;
+}
+
+findgroup(d: array of byte, g: int): array of byte
+{
+	if(len d < 2)
+		return nil;
+	n := (int d[0] << 8) | int d[1];
+	o := 2;
+	while(o + 4 <= n + 2 && o + 4 <= len d){
+		grp := (int d[o] << 8) | int d[o+1];
+		kl := (int d[o+2] << 8) | int d[o+3];
+		if(o + 4 + kl > len d)
+			break;
+		if(grp == g)
+			return d[o+4:o+4+kl];
+		o += 4 + kl;
+	}
+	return nil;
+}
+
+alert(fd: ref Sys->FD, desc: int)
+{
+	a := array[7] of byte;
+	a[0] = byte 21;
+	a[1] = byte 3;
+	a[2] = byte 3;
+	a[3] = byte 0;
+	a[4] = byte 2;
+	a[5] = byte 2;
+	a[6] = byte desc;
+	writeall(fd, a);
+}
+
+# ---- byte helpers -----------------------------------------------------
+
+rd8(r: ref Rd): int
+{
+	if(r.o >= r.n)
+		return -1;
+	return int r.d[r.o++];
+}
+
+rd16(r: ref Rd): int
+{
+	if(r.o + 2 > r.n)
+		return -1;
+	v := (int r.d[r.o] << 8) | int r.d[r.o+1];
+	r.o += 2;
+	return v;
+}
+
+rd24(r: ref Rd): int
+{
+	if(r.o + 3 > r.n)
+		return -1;
+	v := (int r.d[r.o] << 16) | (int r.d[r.o+1] << 8) | int r.d[r.o+2];
+	r.o += 3;
+	return v;
+}
+
+rdbytes(r: ref Rd, n: int): array of byte
+{
+	if(n < 0 || r.o + n > r.n)
+		return nil;
+	a := r.d[r.o:r.o+n];
+	r.o += n;
+	return a;
+}
+
+bp(b: ref Bo, v: int)
+{
+	if(b.n < len b.d)
+		b.d[b.n++] = byte (v & 16rff);
+}
+
+b16(b: ref Bo, v: int)
+{
+	bp(b, v >> 8);
+	bp(b, v);
+}
+
+b24(b: ref Bo, v: int)
+{
+	bp(b, v >> 16);
+	bp(b, v >> 8);
+	bp(b, v);
+}
+
+bpa(b: ref Bo, a: array of byte)
+{
+	for(i := 0; i < len a && b.n < len b.d; i++)
+		b.d[b.n++] = a[i];
+}
+
+cat(a, b: array of byte): array of byte
+{
+	c := array[len a + len b] of byte;
+	for(i := 0; i < len a; i++)
+		c[i] = a[i];
+	for(i = 0; i < len b; i++)
+		c[len a + i] = b[i];
+	return c;
+}
+
+eq(a, b: array of byte): int
+{
+	if(len a != len b)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i] != b[i])
+			return 0;
+	return 1;
+}
+
+tapp(d: array of byte, off: int, a: array of byte): int
+{
+	for(i := 0; i < len a && off + i < len d; i++)
+		d[off+i] = a[i];
+	return off + len a;
+}
+
+randombytes(n: int): array of byte
+{
+	fd := sys->open("/dev/random", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	b := array[n] of byte;
+	if(readn(fd, b, n) != n)
+		b = nil;
+	fd = nil;
+	return b;
+}
+
+
+readn(fd: ref Sys->FD, b: array of byte, n: int): int
+{
+	o := 0;
+	while(o < n){
+		m := sys->read(fd, b[o:n], n - o);
+		if(m <= 0)
+			return o;
+		o += m;
+	}
+	return o;
+}
+
+writeall(fd: ref Sys->FD, b: array of byte): int
+{
+	o := 0;
+	while(o < len b){
+		m := sys->write(fd, b[o:], len b - o);
+		if(m <= 0)
+			return -1;
+		o += m;
+	}
+	return 0;
 }
