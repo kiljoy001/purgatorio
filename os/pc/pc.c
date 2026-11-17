@@ -88,6 +88,7 @@ extern void tkmodinit(void);
 extern void keyringmodinit(void);
 extern void cryptmodinit(void);
 extern void monomodinit(void);
+extern void tlsmodinit(void);
 extern void mathmodinit(void);
 void modinit(void){
 	sysmodinit();
@@ -96,6 +97,7 @@ void modinit(void){
 	keyringmodinit();
 	cryptmodinit();
 	monomodinit();
+	tlsmodinit();
 	mathmodinit();
 }
 

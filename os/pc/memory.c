@@ -347,7 +347,7 @@ ramscan(ulong maxmem)
 	 * bootstrap processor MMU information and the limit is obtained from
 	 * the BIOS data area.
 	 */
-	x = PADDR(CPU0PTE2+BY2PG);
+	x = PADDR(CPU0PTE3+BY2PG);
 	bda = (uchar*)KADDR(0x400);
 	n = ((bda[0x14]<<8)|bda[0x13])*KB-x;
 	mapfree(&rmapram, x, n);

@@ -144,6 +144,9 @@ TEXT mode32bit(SB), $0
 	MOVL	$PADDR(CPU0PTE2), 4(AX)		/* PTE's for 0x80400000 */
 	ORL	BX, 4(AX)
 
+	MOVL	$PADDR(CPU0PTE3), 8(AX)		/* PTE's for 0x80800000 */
+	ORL	BX, 8(AX)
+
 	MOVL	$PADDR(CPU0PTE), AX		/* first page of page table */
 	MOVL	$1024, CX			/* 1024 pages in 4MB */
 _setpte:
@@ -159,6 +162,14 @@ _setpte2:
 	ADDL	$(1<<PGSHIFT), BX
 	ADDL	$4, AX
 	LOOP	_setpte2
+
+	MOVL	$PADDR(CPU0PTE3), AX		/* third page table (8-12MB) */
+	MOVL	$1024, CX
+_setpte3:
+	MOVL	BX, (AX)
+	ADDL	$(1<<PGSHIFT), BX
+	ADDL	$4, AX
+	LOOP	_setpte3
 
 	MOVL	$PADDR(CPU0PTE), AX
 	ADDL	$PTO(MACHADDR), AX		/* page table entry offset for MACHADDR */

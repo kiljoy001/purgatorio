@@ -37,6 +37,7 @@ OBJ=\
 	$LINKS\
 	$PORT\
 	$MISC\
+	tls.$O\
 	$OTHERS\
 
 LIBNAMES=${LIBS:%=lib%.a}
@@ -52,9 +53,12 @@ KERNDATE=`{$NDATE}
 
 default:V: i$CONF
 
-i$CONF: $OBJ $CONF.c $CONF.root.h $LIBNAMES
+bearssl:V:
+	test -f $ROOT/libbearssl/obj-$OBJTYPE/settings.c.8 || (cd $ROOT/libbearssl; ROOT=$ROOT OBJTYPE=$OBJTYPE sh ./build.sh)
+
+i$CONF: $OBJ $CONF.c $CONF.root.h $LIBNAMES bearssl
 	$CC $CFLAGS '-DKERNDATE='$KERNDATE $CONF.c
-	$LD -o $target -T0x80100020 -l $OBJ $CONF.$O $LIBFILES
+	$LD -o $target -T0x80100020 -l $OBJ `ls $ROOT/libbearssl/obj-$OBJTYPE/*.8` $CONF.$O $LIBFILES
 	$KSIZE $target
 
 install:V: i$CONF
@@ -77,6 +81,18 @@ bench.h:D: ../../module/bench.m
 benchmod.h:D:  ../../module/bench.m
 	rm -f $target && limbo -t Bench -I../../module ../../module/bench.m > $target
 devbench.$O: bench.h benchmod.h
+
+tlsif.h:D: $ROOT/module/tls.m
+	rm -f $target && $ROOT/Linux/386/bin/limbo -a -I$ROOT/module $ROOT/module/tls.m > $target
+tlsmod.h:D: $ROOT/module/tls.m
+	rm -f $target && $ROOT/Linux/386/bin/limbo -t TLS -I$ROOT/module $ROOT/module/tls.m > $target
+
+tls.$O: tls.c tlsif.h tlsmod.h
+	gcc -E -undef -Dinline= -Dmemcpy=br_memcpy -I$ROOT/libbearssl/compat \
+		-I$ROOT/Inferno/$OBJTYPE/include -I$ROOT/include \
+		-I$ROOT/libinterp -I. -I$ROOT/libbearssl/inc \
+		-o tls.i tls.c
+	$CC $CFLAGS -o $target tls.i
 $VGA screen.$O:	screen.h vga.h
 
 devuart.$O:	../port/devuart.c ../port/uart.h

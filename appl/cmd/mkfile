@@ -79,6 +79,7 @@ TARG=\
 	getauthinfo.dis\
 	gettar.dis\
 	gif2bit.dis\
+	gemserve.dis\
 	grep.dis\
 	gunzip.dis\
 	gzip.dis\

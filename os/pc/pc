@@ -349,6 +349,7 @@ root
 	/dis/getauthinfo.dis
 	/dis/gettar.dis
 	/dis/gif2bit.dis
+	/dis/gemserve.dis
 	/dis/grep.dis
 	/dis/grid/blurdemo.dis
 	/dis/grid/cpupool.dis

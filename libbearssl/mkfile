@@ -1,0 +1,4 @@
+</$ROOT/mkconfig
+
+default install:V:
+	ROOT=$ROOT OBJTYPE=$OBJTYPE sh ./build.sh

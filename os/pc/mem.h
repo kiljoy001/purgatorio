@@ -37,12 +37,13 @@
 #define	CPU0PDB		0x80002000		/* bootstrap processor PDB */
 #define	CPU0PTE		0x80003000		/* bootstrap processor PTE's for 0-4MB */
 #define	CPU0PTE2	0x80007000		/* bootstrap processor PTE's for 4-8MB */
+#define	CPU0PTE3	0x80008000		/* bootstrap processor PTE's for 8-12MB */
 #define	CPU0GDT		0x80004000		/* bootstrap processor GDT */
 #define	MACHADDR	0x80005000		/* as seen by current processor */
 #define	CPU0MACH	0x80006000		/* Mach for bootstrap processor */
 #define	MACHSIZE	BY2PG
 /*
- * N.B.  ramscan knows that CPU0MACH+BY2PG is the end of reserved data
+ * N.B.  ramscan knows that CPU0PTE3+BY2PG is the end of reserved data
  * N.B.  _start0x00100020 knows that CPU0PDB is the first reserved page
  * and that there are 5 of them.
  */

@@ -1,0 +1,77 @@
+.TH GEMSERVE 8
+.SH NAME
+gemserve \- Gemini server driven by a 9P control file
+.SH SYNOPSIS
+.B gemserve
+.RI [ ctlfile ]
+.SH DESCRIPTION
+.B gemserve
+runs in the Purgatorio guest.  It follows an append-only control file,
+synthesizes a gemtext page from the commands it reads, and serves that
+page over TLS 1.2 using
+.IR tls (2).
+The default control file is
+.BR /n/host/gem/ctl ,
+a 9P mount of a file on the host; the guest only reads it.
+.PP
+The control language is line oriented:
+.TP
+.BI title " text"
+Set the page title.
+.TP
+.BI text " line"
+Append one line of gemtext.
+.TP
+.BI set " key value"
+Set or replace a data key; the value may contain spaces.
+.TP
+.BI del " key"
+Remove a key.
+.TP
+.B clear
+Reset the title, text and keys.
+.PP
+The page is regenerated for every request; it contains the title, the
+text lines, a data list and the count of applied commands.  A missing
+control file leaves the page empty but the listener running.
+.PP
+The certificate and key are kept in
+.B /keydb/gemini.cert
+and
+.BR /keydb/gemini.key .
+On first start,
+.B gemserve
+mints a self-signed ECDSA P-256 leaf with
+.IR tls (2);
+later starts reuse it, so the trust-on-first-use fingerprint is stable.
+.PP
+.B gemserve
+listens on TCP port 1965 on all interfaces.  The guest needs an
+address on the host tap (for example
+.B ip=10.0.0.2
+and
+.B mask=255.255.255.0
+in
+.BR /n/host/net.conf )
+before clients can reach it.
+.SH FILES
+.TF /keydb/gemini.cert
+.TP
+.B /n/host/gem/ctl
+append-only control file, written by the host
+.TP
+.B /keydb/gemini.cert
+leaf certificate, DER
+.TP
+.B /keydb/gemini.key
+ECDSA P-256 private scalar
+.SH SOURCE
+.B /appl/cmd/gemserve.b
+.SH SEE ALSO
+.IR tls (2),
+.IR init (8)
+.SH BUGS
+The control file is opened once at start; if it is absent the server
+does not retry.  The control state is a log: it is replayed from the
+beginning on each start, so a long-lived log is read in full.  There is
+one page and no per-URL routing.

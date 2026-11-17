@@ -25,6 +25,11 @@ Svcd: module
 	init:	fn(nil: ref Draw->Context, nil: list of string);
 };
 
+Gemserve: module
+{
+	init:	fn(nil: ref Draw->Context, args: list of string);
+};
+
 Certify: module
 {
 	init:	fn(nil: ref Draw->Context, argv: list of string);
@@ -65,6 +70,7 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 	setclock();
 	firstboot();
 	svcstart();
+	gemstart(drawcontext);
 	srv();
 
 	spawn shell->init(nil, nil);
@@ -221,6 +227,19 @@ svcstart()
 		return;
 	}
 	spawn svcd->init(nil, "svcd" :: nil);
+}
+
+# Start the Gemini server if the image carries it.  It reads the
+# append-only control file on /n/host and serves the synthesized page
+# over TLS; a missing /n/host/gem/ctl simply leaves the page empty.
+gemstart(ctxt: ref Draw->Context)
+{
+	g := load Gemserve "/dis/gemserve.dis";
+	if(g == nil){
+		sys->print("init: no /dis/gemserve.dis: %r\n");
+		return;
+	}
+	spawn g->init(ctxt, nil);
 }
 
 # Optional per-VM network and payload configuration:
