@@ -1,18 +1,20 @@
 /*
- * devhostring.c - mountable client for 9vm's host 9P shared ring (#~).
+ * devhostring.c - mountable client for 9vm's host 9P shared rings (#~).
  *
  * 9vm reserves the top 2 MiB of guest RAM, publishes it as a Multiboot
- * memory-map entry of type 0x9009, and serves 9P2000 requests from a host
- * thread.  This device maps that region and exposes it as a plain 9P byte
- * stream:
+ * memory-map entry of type 0x9009, and serves 9P2000 requests from host
+ * threads.  This device maps that region and exposes each ring as a plain
+ * 9P byte stream:
  *
  *	#~/host		the host filesystem, ready for mount(2)
  *	#~/client	alias for host
+ *	#~/ns		a 9P server the host relays to (9vm -ns), when offered
  *	#~/ctl		ring status
  *
- * The stream is duplex: writes submit one complete T-message, reads return
- * one complete R-message.  A gdb-free kernel cannot be woken by the host,
- * so reads spin briefly and then sleep.
+ * A stream is duplex: writes submit one complete T-message, reads return
+ * one complete R-message, in the order the host completes them, which
+ * for ns is the order the server answers.  A gdb-free kernel cannot be
+ * woken by the host, so reads spin briefly and then sleep.
  */
 
 #include	"u.h"
@@ -30,6 +32,7 @@ enum
 {
 	Qdir,
 	Qhost,
+	Qns,
 	Qctl,
 };
 
@@ -38,23 +41,43 @@ static Dirtab hostringdir[] =
 	".",		{Qdir, 0, QTDIR},	0,	DMDIR|0555,
 	"host",		{Qhost},		0,	0600,
 	"client",	{Qhost},		0,	0600,
+	"ns",		{Qns},			0,	0600,
 	"ctl",		{Qctl},			0,	0444,
+};
+
+/* one ring: a channel of the shared region and its buffers */
+typedef struct Ring Ring;
+struct Ring
+{
+	char	*name;
+	P9Channel	*ch;		/* nil until the host offers it */
+	P9HostBuffer	*buf;
+	QLock	tx;		/* one writer at a time */
+	QLock	rx;		/* one reader at a time */
+	Lock	lk;
+	Rendez	rd;
+	ulong	free;		/* buffer slots available */
+	int	cur;		/* response being drained */
+	long	len;
+	long	rp;
+	ulong	nreq;
+	ulong	nrep;
+	int	opens;
+};
+
+enum
+{
+	Rhost,
+	Rns,
+	Nring,
 };
 
 static P9HostShared *hostshared;
 static ulong hostpa;
-
-static QLock	hosttx;		/* one writer at a time */
-static QLock	hostrx;		/* one reader at a time */
-static Lock	hostlk;
-static Rendez	hostrd;
-static ulong	hostfree;	/* buffer slots available */
-static int	hostcur = -1;	/* response being drained */
-static long	hostlen;
-static long	hostrp;
-static ulong	hostnreq;
-static ulong	hostnrep;
-static int	hostopens;
+static Ring rings[Nring] = {
+	{ "host" },
+	{ "ns" },
+};
 
 static int
 p9submit(P9TRing *r, P9Slot *s)
@@ -90,13 +113,13 @@ p9poll(P9RRing *r, P9Comp *c)
 }
 
 static void
-hostpause(int spins)
+hostpause(Ring *r, int spins)
 {
 	if(spins < 50){
 		microdelay(2);
 		return;
 	}
-	tsleep(&hostrd, return0, nil, 1);
+	tsleep(&r->rd, return0, nil, 1);
 }
 
 static ulong
@@ -104,6 +127,15 @@ gbit32(uchar *p)
 {
 	return (ulong)p[0] | ((ulong)p[1]<<8) |
 		((ulong)p[2]<<16) | ((ulong)p[3]<<24);
+}
+
+static void
+ringinit(Ring *r, P9Channel *ch, P9HostBuffer *buf)
+{
+	r->ch = ch;
+	r->buf = buf;
+	r->free = (1UL<<P9_HOST_SLOTS) - 1;
+	r->cur = -1;
 }
 
 static void
@@ -148,14 +180,42 @@ hostringinit(void)
 	}
 	if(sizeof(P9Slot) != 32 || sizeof(P9Comp) != 16 ||
 	   sizeof(P9TRing) != 8320 || sizeof(P9RRing) != 4224 ||
-	   (uchar*)&hs->channel - (uchar*)hs != 64){
+	   (uchar*)&hs->channel - (uchar*)hs != 64 ||
+	   (uchar*)&hs->ns - (uchar*)hs != 64 + 12544 + P9_HOST_SLOTS*2*P9_HOST_MSIZE){
 		print("hostring: structure layout mismatch\n");
 		return;
 	}
 	hostshared = hs;
 	hostpa = base;
-	hostfree = (1UL<<P9_HOST_SLOTS) - 1;
-	print("hostring: host transport at %#lux\n", base);
+	ringinit(&rings[Rhost], &hs->channel, hs->buffer);
+	if(hs->features & P9_HOST_FEAT_NS)
+		ringinit(&rings[Rns], &hs->ns, hs->nsbuffer);
+	print("hostring: host transport at %#lux%s\n", base,
+		rings[Rns].ch != nil ? ", ns relayed" : "");
+}
+
+/* the ring behind a file, or an error when the host does not offer it */
+static Ring*
+ringof(Chan *c)
+{
+	Ring *r;
+
+	if(hostshared == nil)
+		error("9ring: no host transport");
+	switch((int)c->qid.path){
+	case Qhost:
+		r = &rings[Rhost];
+		break;
+	case Qns:
+		r = &rings[Rns];
+		break;
+	default:
+		error(Eperm);
+		return nil;
+	}
+	if(r->ch == nil)
+		error("9ring: channel not offered by the host");
+	return r;
 }
 
 static Chan*
@@ -180,6 +240,8 @@ hostringstat(Chan *c, uchar *db, int n)
 static Chan*
 hostringopen(Chan *c, int omode)
 {
+	Ring *r;
+
 	if(c->qid.type & QTDIR){
 		if(omode != OREAD)
 			error(Ebadarg);
@@ -190,16 +252,18 @@ hostringopen(Chan *c, int omode)
 	}
 	if(hostshared == nil)
 		error("9ring: no host transport");
-	if(c->qid.path == Qctl && (omode & OWRITE))
-		error(Eperm);
-	if(c->qid.path == Qhost){
-		lock(&hostlk);
-		if(hostopens > 0){
-			unlock(&hostlk);
-			error("9ring: host channel busy");
+	if(c->qid.path == Qctl){
+		if(omode & OWRITE)
+			error(Eperm);
+	}else{
+		r = ringof(c);
+		lock(&r->lk);
+		if(r->opens > 0){
+			unlock(&r->lk);
+			error("9ring: channel busy");
 		}
-		hostopens++;
-		unlock(&hostlk);
+		r->opens++;
+		unlock(&r->lk);
 	}
 	c->mode = openmode(omode);
 	c->flag |= COPEN;
@@ -211,22 +275,25 @@ hostringopen(Chan *c, int omode)
 static void
 hostringclose(Chan *c)
 {
-	if(c->qid.path != Qhost || !(c->flag & COPEN))
+	Ring *r;
+
+	if(c->qid.path == Qctl || (c->qid.type & QTDIR) || !(c->flag & COPEN))
 		return;
-	qlock(&hostrx);
-	lock(&hostlk);
-	if(hostcur >= 0){
-		hostfree |= 1UL<<hostcur;
-		hostcur = -1;
+	r = ringof(c);
+	qlock(&r->rx);
+	lock(&r->lk);
+	if(r->cur >= 0){
+		r->free |= 1UL<<r->cur;
+		r->cur = -1;
 	}
-	if(hostopens > 0)
-		hostopens--;
-	unlock(&hostlk);
-	qunlock(&hostrx);
+	if(r->opens > 0)
+		r->opens--;
+	unlock(&r->lk);
+	qunlock(&r->rx);
 }
 
 static long
-hostread(void *va, long n)
+hostread(Ring *r, void *va, long n)
 {
 	P9Comp comp;
 	P9HostBuffer *b;
@@ -236,59 +303,59 @@ hostread(void *va, long n)
 
 	if(n <= 0)
 		return 0;
-	qlock(&hostrx);
+	qlock(&r->rx);
 	if(waserror()){
-		qunlock(&hostrx);
+		qunlock(&r->rx);
 		nexterror();
 	}
 	spins = 0;
-	while(hostcur < 0){
-		if(p9poll(&hostshared->channel.r, &comp)){
+	while(r->cur < 0){
+		if(p9poll(&r->ch->r, &comp)){
 			if(comp.result >= P9_HOST_SLOTS || comp.status != 0 ||
 			   comp.count < 7 || comp.count > P9_HOST_MSIZE){
 				if(comp.result < P9_HOST_SLOTS){
-					lock(&hostlk);
-					hostfree |= 1UL<<comp.result;
-					unlock(&hostlk);
+					lock(&r->lk);
+					r->free |= 1UL<<comp.result;
+					unlock(&r->lk);
 				}
 				error("9ring: host request failed");
 			}
-			b = &hostshared->buffer[comp.result];
+			b = &r->buf[comp.result];
 			wirelen = gbit32(b->response);
 			if(wirelen != comp.count ||
 			   b->response[5] != (uchar)comp.tag ||
 			   b->response[6] != (uchar)(comp.tag>>8)){
-				lock(&hostlk);
-				hostfree |= 1UL<<comp.result;
-				unlock(&hostlk);
+				lock(&r->lk);
+				r->free |= 1UL<<comp.result;
+				unlock(&r->lk);
 				error("9ring: invalid host response");
 			}
-			hostcur = comp.result;
-			hostlen = comp.count;
-			hostrp = 0;
-			hostnrep++;
+			r->cur = comp.result;
+			r->len = comp.count;
+			r->rp = 0;
+			r->nrep++;
 			break;
 		}
-		hostpause(spins++);
+		hostpause(r, spins++);
 	}
-	count = hostlen - hostrp;
+	count = r->len - r->rp;
 	if(count > n)
 		count = n;
-	memmove(va, hostshared->buffer[hostcur].response + hostrp, count);
-	hostrp += count;
-	if(hostrp == hostlen){
-		lock(&hostlk);
-		hostfree |= 1UL<<hostcur;
-		unlock(&hostlk);
-		hostcur = -1;
+	memmove(va, r->buf[r->cur].response + r->rp, count);
+	r->rp += count;
+	if(r->rp == r->len){
+		lock(&r->lk);
+		r->free |= 1UL<<r->cur;
+		unlock(&r->lk);
+		r->cur = -1;
 	}
 	poperror();
-	qunlock(&hostrx);
+	qunlock(&r->rx);
 	return count;
 }
 
 static long
-hostwrite(void *va, long n)
+hostwrite(Ring *r, void *va, long n)
 {
 	P9Slot slot;
 	uchar *m;
@@ -301,54 +368,62 @@ hostwrite(void *va, long n)
 	wirelen = gbit32(m);
 	if(wirelen != n)
 		error("9ring: 9P length does not match write");
-	qlock(&hosttx);
+	qlock(&r->tx);
 	if(waserror()){
-		qunlock(&hosttx);
+		qunlock(&r->tx);
 		nexterror();
 	}
 	spins = 0;
 	for(;;){
-		lock(&hostlk);
+		lock(&r->lk);
 		for(i = 0; i < P9_HOST_SLOTS; i++)
-			if(hostfree & (1UL<<i))
+			if(r->free & (1UL<<i))
 				break;
 		if(i < P9_HOST_SLOTS)
-			hostfree &= ~(1UL<<i);
-		unlock(&hostlk);
+			r->free &= ~(1UL<<i);
+		unlock(&r->lk);
 		if(i < P9_HOST_SLOTS)
 			break;
-		hostpause(spins++);
+		hostpause(r, spins++);
 	}
-	memmove(hostshared->buffer[i].request, m, n);
+	memmove(r->buf[i].request, m, n);
 	memset(&slot, 0, sizeof(slot));
 	slot.tag = m[5] | (m[6]<<8);
 	slot.type = m[4];
 	slot.count = n;
 	slot.buf_addr = i;
 	spins = 0;
-	while(p9submit(&hostshared->channel.t, &slot) < 0)
-		hostpause(spins++);
-	wakeup(&hostrd);
-	hostnreq++;
+	while(p9submit(&r->ch->t, &slot) < 0)
+		hostpause(r, spins++);
+	wakeup(&r->rd);
+	r->nreq++;
 	poperror();
-	qunlock(&hosttx);
+	qunlock(&r->tx);
 	return n;
 }
 
 static long
 hostctlread(void *va, long n, vlong off)
 {
-	char buf[256];
-	int len;
+	char buf[512];
+	Ring *r;
+	int len, i;
 
 	if(off < 0)
 		return 0;
 	len = snprint(buf, sizeof(buf),
-		"addr %#lux magic %#lux version %lud slots %d free %#lux "
-		"requests %lud replies %lud\n",
+		"addr %#lux magic %#lux version %lud features %#lux slots %d\n",
 		hostpa, hostshared ? hostshared->magic : 0,
-		hostshared ? hostshared->version : 0, P9_HOST_SLOTS,
-		hostfree, hostnreq, hostnrep);
+		hostshared ? hostshared->version : 0,
+		hostshared ? hostshared->features : 0, P9_HOST_SLOTS);
+	for(i = 0; i < Nring; i++){
+		r = &rings[i];
+		if(r->ch == nil)
+			continue;
+		len += snprint(buf + len, sizeof(buf) - len,
+			"%s free %#lux requests %lud replies %lud\n",
+			r->name, r->free, r->nreq, r->nrep);
+	}
 	if(off >= len)
 		return 0;
 	if(n > len - off)
@@ -360,9 +435,10 @@ hostctlread(void *va, long n, vlong off)
 static long
 hostringread(Chan *c, void *va, long n, vlong off)
 {
-	switch(c->qid.path){
+	switch((int)c->qid.path){
 	case Qhost:
-		return hostread(va, n);
+	case Qns:
+		return hostread(ringof(c), va, n);
 	case Qctl:
 		return hostctlread(va, n, off);
 	}
@@ -373,9 +449,9 @@ static long
 hostringwrite(Chan *c, void *va, long n, vlong off)
 {
 	USED(off);
-	if(c->qid.path != Qhost)
+	if(c->qid.path != Qhost && c->qid.path != Qns)
 		error(Eperm);
-	return hostwrite(va, n);
+	return hostwrite(ringof(c), va, n);
 }
 
 Dev hostringdevtab = {

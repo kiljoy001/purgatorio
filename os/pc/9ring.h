@@ -15,6 +15,7 @@
 #define P9_HOST_SLOTS	8
 #define P9_HOST_MSIZE	32768
 #define P9_HOST_REGION_SIZE	(2*1024*1024)
+#define P9_HOST_FEAT_NS	1	/* features: the ns channel is offered */
 
 typedef struct P9Slot P9Slot;
 struct P9Slot
@@ -78,7 +79,11 @@ struct P9HostShared
 {
 	ulong		magic;
 	ulong		version;
-	uchar		pad[56];
+	ulong		features;
+	uchar		pad[52];
 	P9Channel	channel;
 	P9HostBuffer	buffer[P9_HOST_SLOTS];
+	/* the ns channel (#~/ns), when features has P9_HOST_FEAT_NS */
+	P9Channel	ns;
+	P9HostBuffer	nsbuffer[P9_HOST_SLOTS];
 };
