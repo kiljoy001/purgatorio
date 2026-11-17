@@ -23,4 +23,14 @@ TLS: module
 	# UTCTime strings ("YYMMDDhhmmssZ").  Returns (cert, key, error).
 	certgen: fn(cn: string, notbefore: string, notafter: string):
 		(array of byte, array of byte, string);
+
+	# AES-128-GCM with a 12-byte nonce; seal returns cipher||tag,
+	# open returns plaintext or nil on a bad tag.
+	gcmseal: fn(key: array of byte, nonce: array of byte,
+		ad: array of byte, plain: array of byte): array of byte;
+	gcmopen: fn(key: array of byte, nonce: array of byte,
+		ad: array of byte, cipher: array of byte): array of byte;
+
+	# ECDSA P-256 / SHA-256 signature (ASN.1 DER) over msg.
+	sign: fn(key: array of byte, msg: array of byte): array of byte;
 };

@@ -629,6 +629,120 @@ ghash_plan9(void *y, const void *h, const void *data, size_t len)
 }
 
 void
+TLS_gcmseal(void *fp)
+{
+	F_TLS_gcmseal *f;
+	Array *key, *nonce, *ad, *plain;
+	br_aes_ct_ctr_keys ak;
+	br_gcm_context gc;
+	unsigned char tag[16], *out, *blob;
+	int n;
+
+	f = fp;
+	*f->ret = H;
+	key = f->key;
+	nonce = f->nonce;
+	ad = f->ad;
+	plain = f->plain;
+	if(key == H || nonce == H || plain == H ||
+	   key->len != 16 || nonce->len != 12)
+		return;
+	n = plain->len;
+	out = malloc(n ? n : 1);
+	blob = malloc(n + 16);
+	if(out == nil || blob == nil){
+		free(out);
+		free(blob);
+		return;
+	}
+	memcpy(out, plain->data, n);
+	br_aes_ct_ctr_init(&ak, key->data, 16);
+	br_gcm_init(&gc, &ak.vtable, ghash_plan9);
+	br_gcm_reset(&gc, nonce->data, 12);
+	if(ad != H && ad->len > 0)
+		br_gcm_aad_inject(&gc, ad->data, ad->len);
+	br_gcm_flip(&gc);
+	br_gcm_run(&gc, 1, out, n);
+	br_gcm_get_tag(&gc, tag);
+	memcpy(blob, out, n);
+	memcpy(blob + n, tag, 16);
+	*f->ret = mem2array(blob, n + 16);
+	free(out);
+	free(blob);
+}
+
+void
+TLS_gcmopen(void *fp)
+{
+	F_TLS_gcmopen *f;
+	Array *key, *nonce, *ad, *cipher;
+	br_aes_ct_ctr_keys ak;
+	br_gcm_context gc;
+	unsigned char *out;
+	int n;
+
+	f = fp;
+	*f->ret = H;
+	key = f->key;
+	nonce = f->nonce;
+	ad = f->ad;
+	cipher = f->cipher;
+	if(key == H || nonce == H || cipher == H ||
+	   key->len != 16 || nonce->len != 12 || cipher->len < 16)
+		return;
+	n = cipher->len - 16;
+	out = malloc(n ? n : 1);
+	if(out == nil)
+		return;
+	memcpy(out, cipher->data, n);
+	br_aes_ct_ctr_init(&ak, key->data, 16);
+	br_gcm_init(&gc, &ak.vtable, ghash_plan9);
+	br_gcm_reset(&gc, nonce->data, 12);
+	if(ad != H && ad->len > 0)
+		br_gcm_aad_inject(&gc, ad->data, ad->len);
+	br_gcm_flip(&gc);
+	br_gcm_run(&gc, 0, out, n);
+	if(!br_gcm_check_tag(&gc, cipher->data + n)){
+		free(out);
+		return;
+	}
+	*f->ret = mem2array(out, n);
+	free(out);
+}
+
+void
+TLS_sign(void *fp)
+{
+	F_TLS_sign *f;
+	Array *key, *msg;
+	br_ec_private_key sk;
+	br_sha256_context hc;
+	unsigned char hash[32], sig[80];
+	size_t slen;
+	int n;
+
+	f = fp;
+	*f->ret = H;
+	key = f->key;
+	msg = f->msg;
+	if(key == H || key->len != 32)
+		return;
+	n = msg == H ? 0 : msg->len;
+	br_sha256_init(&hc);
+	if(n > 0)
+		br_sha256_update(&hc, msg->data, n);
+	br_sha256_out(&hc, hash);
+	sk.curve = BR_EC_secp256r1;
+	sk.x = key->data;
+	sk.xlen = 32;
+	slen = br_ecdsa_i15_sign_asn1(&br_ec_p256_m15, &br_sha256_vtable,
+		hash, &sk, sig);
+	if(slen == 0)
+		return;
+	*f->ret = mem2array(sig, slen);
+}
+
+void
 tlsmodinit(void)
 {
 	builtinmod("$TLS", TLSmodtab, TLSmodlen);
