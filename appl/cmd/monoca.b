@@ -3,7 +3,8 @@ implement Monoca;
 #
 # monoca -- issue and publish the identity set as a Merkle root
 #
-#	monoca enroll name pkhex exp	publish a new epoch with this leaf
+#	monoca enroll name [pkhex [exp]]	publish a new epoch with this leaf
+#					(pk and exp default to the user's keyring)
 #	monoca epoch			print the signed epoch record
 #	monoca root			print the current root
 #
@@ -66,7 +67,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 usage()
 {
-	sys->fprint(sys->fildes(2), "usage: monoca enroll name pkhex exp | revoke name | epoch | root\n");
+	sys->fprint(sys->fildes(2), "usage: monoca enroll name [pkhex [exp]] | revoke name | epoch | root\n");
 }
 
 # enroll adds a leaf and publishes a new epoch.  Re-enrolling a name
@@ -74,13 +75,19 @@ usage()
 # authorised set instead of leaving both valid.
 enroll(args: list of string): int
 {
-	if(len args < 3){
+	if(len args < 1){
 		usage();
 		return -1;
 	}
 	name := hd args;
-	pkhex := hd tl args;
-	exp := int hd tl tl args;
+	pkhex := "";
+	exp := 0;
+	if(tl args != nil){
+		pkhex = hd tl args;
+		if(tl tl args != nil)
+			exp = int hd tl tl args;
+	}else
+		pkhex = keyringpk(name);
 	if(len hex2bytes(pkhex) != 32){
 		sys->fprint(sys->fildes(2), "monoca: pk must be 32 bytes of hex\n");
 		return -1;
@@ -90,6 +97,28 @@ enroll(args: list of string): int
 	writefile(DIR + "/leaves",
 		dropname(old, name) + name + " " + pkhex + " " + string exp + "\n");
 	return publish();
+}
+
+# The public half of the identity key is bytes 32 to 64 of the sk line
+# in /usr/<name>/keyring/mono, which is what certify(8) writes.
+keyringpk(name: string): string
+{
+	s := readfile("/usr/" + name + "/keyring/mono");
+	for(; len s > 0;){
+		(nl, line) := nextline(s);
+		s = nl;
+		(fa, nf) := split(line, 3);
+		if(nf >= 2 && fa[0] == "sk"){
+			sk := hex2bytes(fa[1]);
+			if(len sk == 64){
+				h := "";
+				for(i := 32; i < 64; i++)
+					h += sys->sprint("%.2x", int sk[i]);
+				return h;
+			}
+		}
+	}
+	return "";
 }
 
 # revoke removes every leaf for a name.  The next root no longer
@@ -263,8 +292,16 @@ cmp(a, b: array of byte): int
 
 put8(b: array of byte, off, v: int)
 {
-	for(i := 7; i >= 0; i--)
-		b[off+7-i] = byte (v >> (8*i));
+	# Shifts of 32 or more are undefined on a 32-bit int; write the
+	# high half as zero and the low half explicitly.
+	b[off] = byte 0;
+	b[off+1] = byte 0;
+	b[off+2] = byte 0;
+	b[off+3] = byte 0;
+	b[off+4] = byte ((v >> 24) & 16rff);
+	b[off+5] = byte ((v >> 16) & 16rff);
+	b[off+6] = byte ((v >> 8) & 16rff);
+	b[off+7] = byte (v & 16rff);
 }
 
 nextline(s: string): (string, string)

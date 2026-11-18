@@ -669,6 +669,8 @@ root
 	/dis/mkdir.dis
 	/dis/mntgen.dis
 	/dis/monoca.dis
+	/dis/monoauthtest.dis
+	/dis/mcheck.dis
 	/dis/monotest.dis
 	/dis/mount.dis
 	/dis/mouse.dis

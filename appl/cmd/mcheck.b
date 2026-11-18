@@ -286,8 +286,16 @@ cmp(a, b: array of byte): int
 
 put8(b: array of byte, off, v: int)
 {
-	for(i := 7; i >= 0; i--)
-		b[off+7-i] = byte (v >> (8*i));
+	# Shifts of 32 or more are undefined on a 32-bit int; write the
+	# high half as zero and the low half explicitly.
+	b[off] = byte 0;
+	b[off+1] = byte 0;
+	b[off+2] = byte 0;
+	b[off+3] = byte 0;
+	b[off+4] = byte ((v >> 24) & 16rff);
+	b[off+5] = byte ((v >> 16) & 16rff);
+	b[off+6] = byte ((v >> 8) & 16rff);
+	b[off+7] = byte (v & 16rff);
 }
 
 nextline(s: string): (string, string)

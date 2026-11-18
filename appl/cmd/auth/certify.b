@@ -239,8 +239,10 @@ mono_user(name: string, force: int)
 	cert := mono->edsign(signer, signed);
 	if(cert == nil)
 		return;
-	text := "name " + name + "\n" + "sk " + bytes2hex(sk) + "\n" +
-		"cert " + bytes2hex(cert) + "\n";
+	# The scope is written out explicitly; monoauth(8) compares it on
+	# both ends and defaults to box/default when the lines are absent.
+	text := "name " + name + "\n" + "domain mono\n" + "path box/default\n" +
+		"sk " + bytes2hex(sk) + "\n" + "cert " + bytes2hex(cert) + "\n";
 	if(puts(file, text) < 0)
 		sys->fprint(stderr, "certify: cannot write %s: %r\n", file);
 	else

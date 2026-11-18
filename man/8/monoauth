@@ -27,23 +27,86 @@ a signer key in
 .BR /keydb/mono-signer ,
 and one identity file per user,
 .BR /usr/\fIname\fP/keyring/mono ,
-holding a name, a 64-byte EdDSA secret key and a 64-byte certificate.
-.PP
-Both sides send one message:
+holding a name, a domain, a capability path, a 64-byte EdDSA secret
+key and a 64-byte certificate.
+.SS Handshake
+The client sends a hello, the server answers with its hello and a
+signature, and the client signs in return.  A hello is
 .IP
 .EX
-len name || name || pk || cert || ephemeral pk
+version, name, pk, cert, ephemeral pk, domain, path, proof
 .EE
 .IP
+with one-byte lengths for the strings and fixed 32- and 64-byte fields.
 The certificate is an EdDSA signature over
 .IR name || "\en" || pk ,
 verified with the signer's public key (bytes 32 to 64 of
 .BR mono-signer ).
-The ephemeral X25519 keys give a shared secret; BLAKE2b derives one key
-per direction from a transcript of both messages plus the shared
-secret; XChaCha20-Poly1305 protects each record, with a per-direction
-counter as the nonce.
+The proof is
+.IP
+.EX
+exp, epoch, time, window, root, epoch signature, leaf, index, path
+.EE
+.IP
+where
+.I path
+is the Merkle inclusion path for the leaf
+.IR "leaf(name, pk, exp)" .
+The epoch signature covers
+.IR "epoch1" || epoch || time || window || root
+and is verified with the same signer, so a proof is only useful if it
+was issued by the machine's signer.
 .PP
+Both hellos are hashed into a transcript.  The server signs the
+transcript and the client verifies it with the server's key; the client
+then signs the same transcript and the server verifies it with the
+client's key.  Neither side has accepted the session until both
+signatures check, so an intermediary cannot splice one hello into
+another connection or replay an old exchange.
+.PP
+The ephemeral X25519 keys give a shared secret; BLAKE2b derives one key
+per direction from the transcript, the shared secret and the role
+labels
+.B c2s
+and
+.BR s2c .
+XChaCha20-Poly1305 protects each record, with a per-direction counter
+as the nonce.
+.SS Scope and revocation
+.I domain
+and
+.I path
+must be equal on both sides.  A server therefore only talks to clients
+provisioned for the same capability, and a client only to a server in
+its own scope.  Both default to
+.B mono
+and
+.BR box/default ,
+so existing identities interoperate until an administrator subdivides
+them.
+.PP
+A peer that presents no proof is accepted only when its path begins
+with
+.BR box/ .
+A local identity whose path is outside
+.B box/
+refuses to connect when it cannot build a proof: no epoch file, an
+epoch signature that does not verify, an epoch older than its window,
+a key that is not in the leaves, or an inclusion path that does not
+reach the signed root.  The failure is therefore closed, not open: an
+unreachable
+.I monoca
+reduces an identity to the
+.B box/
+namespace instead of granting it more.
+.PP
+Revocation is the absence of a leaf in a newer epoch: a revoked key
+can no longer build a proof, and peers reject it.  Epochs are retained
+under
+.BR /keydb/monoca/roots/\fIn\fP ,
+so a proof against an older root can be checked if one is presented
+within its window.
+.SS Transport
 Records are a 4-byte length, a 16-byte tag and the ciphertext.  The
 plaintext inside a record begins with a session tag and a frame type
 (OPEN, DATA, FIN), so one link carries any number of sessions.  Each
@@ -60,6 +123,32 @@ The authenticated name is passed to the command as
 in the
 .IR listen (1)
 context, exactly as with the keyring algorithms.
+.SH EXAMPLE
+Make a signer and an identity, then publish an epoch that authorises
+it:
+.IP
+.EX
+certify firstboot
+certify user alice
+monoca enroll alice
+listen -a mono 'tcp!*!17010' /dis/sh.dis
+.EE
+.PP
+.I monoca
+reads the public key from the user's keyring when no key is given, and
+.I certify
+writes the default scope into the same file.  A deployment that wants
+to separate services from users copies the identity file to another
+name and edits the scope, for example:
+.IP
+.EX
+cp /usr/alice/keyring/mono /usr/build/keyring/mono
+echo 'domain build' >> /usr/build/keyring/mono
+echo 'path svc'    >> /usr/build/keyring/mono
+.EE
+.PP
+Both ends must then carry the same scope, or the handshake fails with
+.B "mono: scope mismatch"
 .SH FILES
 .TF /usr/\fIname\fP/keyring/mono
 .TP
@@ -67,16 +156,26 @@ context, exactly as with the keyring algorithms.
 EdDSA signer key (private half; root only)
 .TP
 .BI /usr/ name /keyring/mono
-name, secret key and certificate
+name, domain, path, secret key and certificate
+.TP
+.B /keydb/monoca
+epoch, leaves and retained roots from
+.IR monoca (8)
 .SH SOURCE
 .B /appl/lib/monoauth.b
 .SH SEE ALSO
 .IR mono (2),
+.IR merkle (2),
 .IR certify (8),
+.IR monoca (8),
 .IR listen (1),
 .IR rcmd (1),
 .IR cpu (1)
 .SH BUGS
+Handshake version 2 is not compatible with earlier
+.I monoauth
+peers; both ends must be rebuilt.
+.PP
 Each connection carries one session for now:
 .I listen
 accepts a session from the link, runs the command, and closes it.  The
@@ -86,6 +185,8 @@ not yet accept more than one session per link, and
 .I rcmd
 opens a fresh link for each invocation.
 .PP
-There is no forward secrecy beyond the ephemeral exchange, no
-revocation, no rekeying, and no keepalive; the record counter space is
-2 to the 32.
+There is no rekeying and no keepalive; the record counter space is 2 to
+the 32.  An epoch is checked against the local clock only, so the clock
+must be disciplined (see
+.IR timed (8))
+for proofs to remain valid.

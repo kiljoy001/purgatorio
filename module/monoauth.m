@@ -1,5 +1,6 @@
 #
-#  mono authentication: EdDSA certificates, X25519 key exchange and an
+#  mono authentication: EdDSA certificates, a monoca epoch proof, an
+#  X25519 key exchange signed over the handshake transcript, and an
 #  XChaCha20-Poly1305 stream, all from $Mono.
 #
 Monoauth: module

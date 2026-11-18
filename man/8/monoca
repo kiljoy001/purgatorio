@@ -4,7 +4,9 @@ monoca \- publish the authorised identity set as a signed Merkle root
 .SH SYNOPSIS
 .B monoca
 .B enroll
-.I name pkhex exp
+.I name
+.RI [ pkhex
+.RI [ exp ]]
 .br
 .B monoca
 .B revoke
@@ -57,7 +59,17 @@ confused with an identity signature.
 .B enroll
 adds a leaf.  Re-enrolling a name replaces its previous leaf, so key
 rotation removes the old key from the authorised set rather than
-leaving both valid.
+leaving both valid.  When
+.I pkhex
+is omitted the public key is taken from bytes 32 to 64 of the
+.B sk
+line in
+.BI /usr/ name /keyring/mono\fR,
+which is what
+.IR certify (8)
+writes, and
+.I exp
+defaults to 0 (never expires).
 .B revoke
 removes every leaf for
 .IR name .
@@ -69,7 +81,8 @@ prints the current root in hex.
 The record being replaced is retained as
 .BI roots/ n\fR,
 so a token minted in the previous epoch can still be checked during the
-grace window.  A verifier accepts only the current or the previous
+grace window by
+.IR mcheck (1).  A verifier accepts only the current or the previous
 epoch, and only until
 .IR time\ +\ window ;
 without a current record it must fail closed rather than accept a
