@@ -38,7 +38,15 @@ options or from
 .BR /lib/ndb/time ,
 one
 .B sntp=\fIhost\fP
-line per server.  After a successful exchange it computes
+line per server.  If neither is given, three public anycast servers are
+tried by address (the guest may not have a resolver yet): NIST
+.BR 132.163.96.1 ,
+Cloudflare
+.BR 162.159.200.1 ,
+and Google
+.BR 216.239.35.0 .
+Each query has a two-second timeout, so an isolated or filtered network
+falls back to the boot clock instead of stalling.  After a successful exchange it computes
 offset and round-trip delay from the four timestamps and steps
 .B /dev/time
 when the offset exceeds one second, or when the clock has not yet been
@@ -107,6 +115,11 @@ last published state
 Offsets are stepped, not slewed, so a later correction can move the
 wall clock backwards.  Leap seconds, NTP authentication and server
 selection by stratum are not implemented; SNTP replies are accepted
-from the first configured server that answers.  A reply is checked for
+from the first configured server that answers.  The default list is
+unauthenticated and reveals the guest's address to those operators;
+use
+.B /lib/ndb/time
+to choose your own.  Google's public time is leap-smeared, so it is
+listed last.  A reply is checked for
 the client's origin timestamp but the server is not authenticated,
 so this is only as trustworthy as the network path.

@@ -6,8 +6,8 @@
 #    monotonic sys->millisec(), milliseconds since boot, never set
 #
 #  timed reads a coarse time at boot (the host's epoch on 9vm), then
-#  queries SNTP servers from /lib/ndb/time and steps /dev/time when the
-#  offset is large.  It publishes ordinary files in a directory (default
+#  queries SNTP servers: -s options, /lib/ndb/time, or the public
+#  anycast defaults.  It steps /dev/time when the offset is large.  It publishes ordinary files in a directory (default
 #  /n/time):
 #
 #    status   source, sync state, offset, delay, stratum, last sync,
@@ -83,6 +83,13 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	if(st.servers == nil)
 		readndb();
+	if(st.servers == nil){
+		# Public anycast servers, by address: the guest may not have a
+		# resolver yet.  Cloudflare, Google (leap-smeared) and NIST.
+		addserver("162.159.200.1");
+		addserver("216.239.35.0");
+		addserver("132.163.96.1");
+	}
 	if(mkdir(st.dir) < 0){
 		sys->print("timed: cannot create %s: %r\n", st.dir);
 		return;
@@ -193,6 +200,31 @@ sync()
 
 sntp(server: string): (big, big, int, string)
 {
+	res := chan of (big, big, int, string);
+	pidc := chan of int;
+	spawn query(server, res, pidc);
+	pid := <-pidc;
+	tc := chan of int;
+	spawn after(2000, tc);
+	alt {
+	(off, del, stratum, e) := <-res =>
+		return (off, del, stratum, e);
+	<-tc =>
+		interrupt(pid);
+		return (big 0, big 0, 0, "timeout");
+	}
+}
+
+# A UDP read on a blackholed server never returns, so the query runs in
+# its own process and is interrupted by a note when the timer fires.
+query(server: string, res: chan of (big, big, int, string), pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	res <-= sntp1(server);
+}
+
+sntp1(server: string): (big, big, int, string)
+{
 	c := dial->dial("udp!" + server + "!123", nil);
 	if(c == nil)
 		return (big 0, big 0, 0, sys->sprint("dial: %r"));
@@ -226,6 +258,26 @@ sntp(server: string): (big, big, int, string)
 	off := ((t2 - t1) + (t3 - t4)) / big 2;
 	del := (t4 - t1) - (t3 - t2);
 	return (off, del, stratum, nil);
+}
+
+after(ms: int, c: chan of int)
+{
+	sys->sleep(ms);
+	alt {
+	c <-= 1 =>
+		;
+	* =>
+		;
+	}
+}
+
+interrupt(pid: int)
+{
+	fd := sys->open("/prog/" + string pid + "/note", Sys->OWRITE);
+	if(fd == nil)
+		return;
+	sys->write(fd, array of byte "interrupt", 9);
+	fd = nil;
 }
 
 # NTP timestamps are seconds since 1900 in a 32.32 fixed point.
