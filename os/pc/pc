@@ -129,11 +129,22 @@ root
 	/n	/
 	/n/remote	/
 	/net	/
+	/net.alt	/
 	/nvfs	/
 	/prog	/
 	/osinit.dis
 	/lib/wmsetup
 	/lib/cpusession.sh
+	/lib/ndb/common
+	/lib/ndb/dns
+	/lib/ndb/inferno
+	/lib/ndb/local
+	/lib/ndb/registry
+	/lib/ndb/services
+	/dis/ndb/cs.dis
+	/dis/ndb/csquery.dis
+	/dis/ndb/dns.dis
+	/dis/ndb/dnsquery.dis
 	/icons/tk/exit.bit
 	/icons/tk/task.bit
 	/icons/tk/maxf.bit

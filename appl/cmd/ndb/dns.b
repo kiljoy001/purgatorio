@@ -92,12 +92,14 @@ init(nil: ref Draw->Context, args: list of string)
 	if(dial == nil)
 		cantload(Dial->PATH);
 	arg->init(args);
-	arg->setusage("dns [-Drh] [-f dnsfile] [-x mntpt]");
+	arg->setusage("dns [-Ddrh] [-f dnsfile] [-x mntpt]");
 	svcname := "#sdns";
 	while((c := arg->opt()) != 0)
 		case c {
 		'D' =>
 			debug = 1;
+		'd' =>
+			usedial = 1;
 		'f' =>	
 			dnsfile = arg->earg();
 		'h' =>
@@ -983,9 +985,33 @@ parent(s: string): string
 
 rootservers(): list of ref NS
 {
-	slist := ref NS("a.root-servers.net",
-		ref RR.A("a.root-servers.net", Ta, Cin, 1<<31, 0,
-			array[] of {byte 198, byte 41, byte 0, byte 4})::nil, 0, 1<<31) :: nil;
+	slist: list of ref NS;
+	slist = ref NS("m.root-servers.net", ref RR.A("m.root-servers.net", Ta, Cin, 1<<31, 0,
+		array[] of {byte 202, byte 12, byte 27, byte 33})::nil, 0, 1<<31) :: slist;
+	slist = ref NS("l.root-servers.net", ref RR.A("l.root-servers.net", Ta, Cin, 1<<31, 0,
+		array[] of {byte 199, byte 7, byte 83, byte 42})::nil, 0, 1<<31) :: slist;
+	slist = ref NS("k.root-servers.net", ref RR.A("k.root-servers.net", Ta, Cin, 1<<31, 0,
+		array[] of {byte 193, byte 0, byte 14, byte 129})::nil, 0, 1<<31) :: slist;
+	slist = ref NS("j.root-servers.net", ref RR.A("j.root-servers.net", Ta, Cin, 1<<31, 0,
+		array[] of {byte 198, byte 41, byte 0, byte 10})::nil, 0, 1<<31) :: slist;
+	slist = ref NS("i.root-servers.net", ref RR.A("i.root-servers.net", Ta, Cin, 1<<31, 0,
+		array[] of {byte 192, byte 36, byte 148, byte 17})::nil, 0, 1<<31) :: slist;
+	slist = ref NS("h.root-servers.net", ref RR.A("h.root-servers.net", Ta, Cin, 1<<31, 0,
+		array[] of {byte 198, byte 97, byte 190, byte 53})::nil, 0, 1<<31) :: slist;
+	slist = ref NS("g.root-servers.net", ref RR.A("g.root-servers.net", Ta, Cin, 1<<31, 0,
+		array[] of {byte 192, byte 112, byte 36, byte 4})::nil, 0, 1<<31) :: slist;
+	slist = ref NS("f.root-servers.net", ref RR.A("f.root-servers.net", Ta, Cin, 1<<31, 0,
+		array[] of {byte 192, byte 5, byte 5, byte 241})::nil, 0, 1<<31) :: slist;
+	slist = ref NS("e.root-servers.net", ref RR.A("e.root-servers.net", Ta, Cin, 1<<31, 0,
+		array[] of {byte 192, byte 203, byte 230, byte 10})::nil, 0, 1<<31) :: slist;
+	slist = ref NS("d.root-servers.net", ref RR.A("d.root-servers.net", Ta, Cin, 1<<31, 0,
+		array[] of {byte 199, byte 7, byte 91, byte 13})::nil, 0, 1<<31) :: slist;
+	slist = ref NS("c.root-servers.net", ref RR.A("c.root-servers.net", Ta, Cin, 1<<31, 0,
+		array[] of {byte 192, byte 33, byte 4, byte 12})::nil, 0, 1<<31) :: slist;
+	slist = ref NS("b.root-servers.net", ref RR.A("b.root-servers.net", Ta, Cin, 1<<31, 0,
+		array[] of {byte 170, byte 247, byte 170, byte 2})::nil, 0, 1<<31) :: slist;
+	slist = ref NS("a.root-servers.net", ref RR.A("a.root-servers.net", Ta, Cin, 1<<31, 0,
+		array[] of {byte 198, byte 41, byte 0, byte 4})::nil, 0, 1<<31) :: slist;
 	return slist;
 }
 
@@ -1050,6 +1076,13 @@ Step1:
 				slist = hd known :: slist;
 			if(slist != nil)
 				break;
+		}
+		# A configured resolver with -r is a forwarder: let it
+		# recurse, rather than walking the roots ourselves.
+		if(referdns){
+			rl := defaultresolvers();
+			if(rl != nil)
+				slist = rl;
 		}
 		# if no servers, resort to safety belt
 		if(slist == nil){
@@ -1670,6 +1703,7 @@ rrtypename(t: int): string
 #
 Udphdrsize: con Udphdrlen;
 dnsid := 1;
+usedial := 0;
 
 mkquery(qtype: int, qclass: int, name: string): (int, array of byte, string)
 {
@@ -1694,6 +1728,9 @@ mkquery(qtype: int, qclass: int, name: string): (int, array of byte, string)
 udpquery(fd: ref Sys->FD, id: int, query: array of byte, sname: string, addr: ref RR): (ref DNSmsg, string)
 {
 	# TO DO: check address and ports?
+
+	if(usedial)
+		return dialquery(query, sname, addr);
 
 	if(debug)
 		sys->print("udp query %s\n", sname);
@@ -1750,6 +1787,57 @@ udpquery(fd: ref Sys->FD, id: int, query: array of byte, sname: string, addr: re
 	}
 	if(debug)
 		sys->print("reply: %s\n", dm.text());
+	return (dm, nil);
+}
+
+# Ordinary connected UDP, for kernels whose #I does not use the hosted
+# emulator's header layout.
+dialquery(query: array of byte, sname: string, addr: ref RR): (ref DNSmsg, string)
+{
+	ipa: array of byte;
+	pick ar := addr {
+	A =>
+		ipa = ar.rdata[0:4];
+	* =>
+		return (nil, "not an A resource");
+	}
+	port := (int query[Udprport]<<8) | int query[Udprport+1];
+	raddr := sys->sprint("udp!%d.%d.%d.%d!%d", int ipa[0], int ipa[1],
+		int ipa[2], int ipa[3], port);
+	conn := dial->dial(raddr, nil);
+	if(conn == nil)
+		return (nil, sys->sprint("%s: %r", raddr));
+	fd := conn.dfd;
+	if(fd == nil)
+		fd = sys->open(conn.dir+"/data", Sys->ORDWR);
+	if(fd == nil)
+		return (nil, sys->sprint("%s: %r", raddr));
+	msg := query[Udphdrsize:];
+	id := (int msg[0]<<8) | int msg[1];
+	c := chan of array of byte;
+	pidc := chan of int;
+	spawn reader(fd, c, pidc);
+	rpid := <-pidc;
+	spawn timer(c, pidc);
+	tpid := <-pidc;
+	dm: ref DNSmsg;
+	for(ntries := 0; ntries < 3; ntries++){
+		if(sys->write(fd, msg, len msg) != len msg)
+			break;
+		buf := <-c;
+		if(buf == nil)
+			continue;
+		dm = DNSmsg.unpack(buf);
+		if(dm != nil && (dm.flags & Fresp) && dm.id == id)
+			break;
+		dm = nil;
+	}
+	kill(tpid);
+	kill(rpid);
+	if(dm == nil)
+		return (nil, sys->sprint("%s: no reply", raddr));
+	if(dm.err != nil)
+		return (nil, dm.err);
 	return (dm, nil);
 }
 
