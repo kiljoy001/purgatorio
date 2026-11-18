@@ -229,12 +229,9 @@ daemon(args: list of string): int
 		if(interval < 1)
 			interval = 1;
 	}
-	if((p := int readfile(DIR + "/daemon")) > 0){
-		(ok, nil) := sys->stat("/prog/" + string p);
-		if(ok >= 0){
-			sys->fprint(sys->fildes(2), "monoca: daemon %d is already running\n", p);
-			return -1;
-		}
+	if((p := int readfile(DIR + "/daemon")) > 0 && pidismonoca(p)){
+		sys->fprint(sys->fildes(2), "monoca: daemon %d is already running\n", p);
+		return -1;
 	}
 	sk := getsk();
 	if(sk == nil)
@@ -274,7 +271,9 @@ stop()
 		sys->fprint(sys->fildes(2), "monoca: no daemon\n");
 		return;
 	}
-	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	fd: ref Sys->FD;
+	if(pidismonoca(pid))
+		fd = sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
 	if(fd == nil){
 		sys->fprint(sys->fildes(2), "monoca: daemon %d is gone\n", pid);
 		sys->remove(DIR + "/daemon");
@@ -458,11 +457,8 @@ lockwait(): ref Sys->FD
 			return fd;
 		}
 		pid := int readfile(LOCK);
-		if(pid > 0){
-			(ok, nil) := sys->stat("/prog/" + string pid);
-			if(ok < 0)
-				sys->remove(LOCK);
-		}
+		if(pid > 0 && !pidismonoca(pid))
+			sys->remove(LOCK);
 		sys->sleep(100);
 	}
 	return nil;
@@ -472,6 +468,30 @@ unlock(fd: ref Sys->FD)
 {
 	fd = nil;
 	sys->remove(LOCK);
+}
+
+# A pid alone is not enough: pids are reused across boots, so check
+# that the process is still a Monoca before trusting a pid file.
+pidismonoca(pid: int): int
+{
+	(ok, nil) := sys->stat("/prog/" + string pid + "/status");
+	if(ok < 0)
+		return 0;
+	return contains(readfile("/prog/" + string pid + "/status"), "Monoca");
+}
+
+contains(s, sub: string): int
+{
+	if(len sub == 0)
+		return 1;
+	for(i := 0; i + len sub <= len s; i++){
+		j := 0;
+		while(j < len sub && s[i+j] == sub[j])
+			j++;
+		if(j == len sub)
+			return 1;
+	}
+	return 0;
 }
 
 # ---- helpers ---------------------------------------------------------
