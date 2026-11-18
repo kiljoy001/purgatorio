@@ -52,7 +52,7 @@ $O.$CONF:	$OBJ $CONF.c $CONF.root.h $LIBNAMES bearssl
 
 bearssl:V:
 	test -f $ROOT/libbearssl/obj-emu-$OBJTYPE/settings.o || \
-		(cd $ROOT/libbearssl; ROOT=$ROOT OBJTYPE=$OBJTYPE EMU=1 sh ./build.sh)
+		(cd $ROOT/libbearssl; ROOT=$ROOT OBJTYPE=$OBJTYPE EMU=1 GCC=${EMUGCC:-gcc} sh ./build.sh)
 
 tls.$O:	$ROOT/os/pc/tls.c $ROOT/os/pc/tlsif.h $ROOT/os/pc/tlsmod.h
 	$CC $TLSFLAGS -o $target $ROOT/os/pc/tls.c

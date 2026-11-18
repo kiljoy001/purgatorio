@@ -1,4 +1,5 @@
 	.file	"arm-tas-v7.S"
+	.arch	armv7-a
 #ifndef ARMv7
 #define	DMB	mcr     p15, 0, r0, c7, c10, 5
 #else

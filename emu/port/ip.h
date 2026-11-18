@@ -8,7 +8,8 @@ enum
 	OUdphdrlenv4	= 2*IPv4addrlen+2*2,
 
 	S_TCP		= 0,
-	S_UDP
+	S_UDP,
+	S_IL
 };
 
 typedef struct Fs Fs;
@@ -31,6 +32,12 @@ extern int		so_hangup(int, int);
 extern void		so_setsockopt(int, int, int);
 extern int		so_mustbind(int, int);
 extern void		so_keepalive(int, int);
+extern int		so_rawil(void);
+extern int		so_rawsend(int, uchar*, void*, int);
+extern int		so_rawrecv(int, void*, int, uchar*, uchar*);
+extern int		so_rawil4(void);
+extern int		so_rawsend4(int, uchar*, void*, int);
+extern int		so_rawrecv4(int, void*, int, uchar*, uchar*);
 
 
 extern void		hnputl(void *p, unsigned long v);

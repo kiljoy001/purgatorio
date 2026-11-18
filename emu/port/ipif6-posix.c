@@ -399,6 +399,146 @@ so_mustbind(int restricted, int port)
 	return restricted || port != 0;
 }
 
+/*
+ * Raw IL transport: one socket carries IP protocol 40.
+ * The host kernel fills in the IPv6 header on send; on
+ * receive the packet starts at the IL header.
+ */
+int
+so_rawil(void)
+{
+	int fd, one;
+
+	fd = socket(AF_INET6, SOCK_RAW, 40);
+	if(fd < 0)
+		oserror();
+	one = 1;
+	setsockopt(fd, IPPROTO_IPV6, IPV6_RECVPKTINFO, (char*)&one, sizeof(one));
+	return fd;
+}
+
+int
+so_rawsend(int fd, uchar *dst, void *buf, int len)
+{
+	int r;
+	struct sockaddr_storage sa;
+	struct sockaddr_in6 *sin6;
+
+	memset(&sa, 0, sizeof(sa));
+	sin6 = (struct sockaddr_in6*)&sa;
+	sin6->sin6_family = AF_INET6;
+	memmove((uchar*)&sin6->sin6_addr, dst, IPaddrlen);
+	osenter();
+	r = sendto(fd, buf, len, 0, (struct sockaddr*)sin6, sizeof(*sin6));
+	osleave();
+	return r;
+}
+
+int
+so_rawrecv(int fd, void *buf, int len, uchar *src, uchar *dst)
+{
+	int r;
+	struct msghdr mh;
+	struct iovec iov;
+	struct sockaddr_storage sa;
+	struct sockaddr_in6 *sin6;
+	char ctl[256];
+	struct cmsghdr *cm;
+	struct in6_pktinfo *pi;
+
+	memset(&sa, 0, sizeof(sa));
+	memset(&mh, 0, sizeof(mh));
+	iov.iov_base = buf;
+	iov.iov_len = len;
+	mh.msg_name = &sa;
+	mh.msg_namelen = sizeof(sa);
+	mh.msg_iov = &iov;
+	mh.msg_iovlen = 1;
+	mh.msg_control = ctl;
+	mh.msg_controllen = sizeof(ctl);
+	osenter();
+	r = recvmsg(fd, &mh, 0);
+	osleave();
+	if(r < 0)
+		return -1;
+	sin6 = (struct sockaddr_in6*)&sa;
+	if(sa.ss_family == AF_INET6)
+		memmove(src, (uchar*)&sin6->sin6_addr, IPaddrlen);
+	else
+		memmove(src, v6Unspecified, IPaddrlen);
+	memmove(dst, v6Unspecified, IPaddrlen);
+	for(cm = CMSG_FIRSTHDR(&mh); cm != nil; cm = CMSG_NXTHDR(&mh, cm)){
+		if(cm->cmsg_level == IPPROTO_IPV6 && cm->cmsg_type == IPV6_PKTINFO){
+			pi = (struct in6_pktinfo*)CMSG_DATA(cm);
+			memmove(dst, (uchar*)&pi->ipi6_addr, IPaddrlen);
+			break;
+		}
+	}
+	return r;
+}
+
+/*
+ * IPv4 IL transport.  Same protocol number, one AF_INET socket.
+ * Received packets include the IPv4 header; it is stripped and
+ * the addresses are returned in v4-mapped form so the demux in
+ * devip sees a single address shape.
+ */
+int
+so_rawil4(void)
+{
+	int fd;
+
+	fd = socket(AF_INET, SOCK_RAW, 40);
+	if(fd < 0)
+		oserror();
+	return fd;
+}
+
+int
+so_rawsend4(int fd, uchar *dst, void *buf, int len)
+{
+	int r;
+	struct sockaddr_storage sa;
+	struct sockaddr_in *sin;
+
+	memset(&sa, 0, sizeof(sa));
+	sin = (struct sockaddr_in*)&sa;
+	sin->sin_family = AF_INET;
+	memmove((uchar*)&sin->sin_addr, dst, 4);
+	osenter();
+	r = sendto(fd, buf, len, 0, (struct sockaddr*)sin, sizeof(*sin));
+	osleave();
+	return r;
+}
+
+int
+so_rawrecv4(int fd, void *buf, int len, uchar *src, uchar *dst)
+{
+	int r, ihl;
+	struct sockaddr_storage sa;
+	socklen_t salen;
+	uchar *ip;
+
+	salen = sizeof(sa);
+	osenter();
+	r = recvfrom(fd, buf, len, 0, (struct sockaddr*)&sa, &salen);
+	osleave();
+	if(r < 0)
+		return -1;
+	ip = (uchar*)buf;
+	if(r < 20 || (ip[0] >> 4) != 4)
+		return -1;
+	ihl = (ip[0] & 0x0f) * 4;
+	if(ihl < 20 || r < ihl)
+		return -1;
+	v4tov6(src, ip+12);
+	v4tov6(dst, ip+16);
+	r -= ihl;
+	if(r > 0)
+		memmove(ip, ip+ihl, r);
+	return r;
+}
+
 void
 so_keepalive(int fd, int ms)
 {
