@@ -52,6 +52,7 @@ St: adt
 };
 
 st: ref St;
+busy: int;
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -115,8 +116,8 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	for(;;){
-		if(st.servers != nil)
-			sync();
+		if(st.servers != nil && !busy)
+			spawn dosync();
 		publish();
 		sys->sleep(st.interval * 1000);
 	}
@@ -164,11 +165,19 @@ status(): string
 
 # ---- SNTP -------------------------------------------------------------
 
-sync()
+
+# The query runs in its own process so a blackholed server cannot
+# stall the service.  A read that never returns leaves this process
+# blocked, busy set, and no further attempts until restart: the host
+# clock remains and status keeps being published.
+dosync()
 {
+	if(busy)
+		return;
+	busy = 1;
 	for(l := st.servers; l != nil; l = tl l){
 		srv := hd l;
-		(off, del, stratum, e) := sntp(srv);
+		(off, del, stratum, e) := sntp1(srv);
 		if(e != nil){
 			sys->print("timed: %s: %s\n", srv, e);
 			continue;
@@ -194,33 +203,9 @@ sync()
 				srv, off);
 		}
 		st.last = (cur + off) / big 1000000;
-		return;
+		break;
 	}
-}
-
-sntp(server: string): (big, big, int, string)
-{
-	res := chan of (big, big, int, string);
-	pidc := chan of int;
-	spawn query(server, res, pidc);
-	pid := <-pidc;
-	tc := chan of int;
-	spawn after(2000, tc);
-	alt {
-	(off, del, stratum, e) := <-res =>
-		return (off, del, stratum, e);
-	<-tc =>
-		interrupt(pid);
-		return (big 0, big 0, 0, "timeout");
-	}
-}
-
-# A UDP read on a blackholed server never returns, so the query runs in
-# its own process and is interrupted by a note when the timer fires.
-query(server: string, res: chan of (big, big, int, string), pidc: chan of int)
-{
-	pidc <-= sys->pctl(0, nil);
-	res <-= sntp1(server);
+	busy = 0;
 }
 
 sntp1(server: string): (big, big, int, string)
@@ -258,26 +243,6 @@ sntp1(server: string): (big, big, int, string)
 	off := ((t2 - t1) + (t3 - t4)) / big 2;
 	del := (t4 - t1) - (t3 - t2);
 	return (off, del, stratum, nil);
-}
-
-after(ms: int, c: chan of int)
-{
-	sys->sleep(ms);
-	alt {
-	c <-= 1 =>
-		;
-	* =>
-		;
-	}
-}
-
-interrupt(pid: int)
-{
-	fd := sys->open("/prog/" + string pid + "/note", Sys->OWRITE);
-	if(fd == nil)
-		return;
-	sys->write(fd, array of byte "interrupt", 9);
-	fd = nil;
 }
 
 # NTP timestamps are seconds since 1900 in a 32.32 fixed point.

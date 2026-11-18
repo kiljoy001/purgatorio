@@ -1112,7 +1112,7 @@ Step1:
 				if(ns.addr == nil)
 					continue;
 			}
-			if(fd == nil){
+			if(fd == nil && !usedial){
 				fd = udpport();
 				if(fd == nil)
 					return (nil, sys->sprint("%r"));
@@ -1814,26 +1814,20 @@ dialquery(query: array of byte, sname: string, addr: ref RR): (ref DNSmsg, strin
 		return (nil, sys->sprint("%s: %r", raddr));
 	msg := query[Udphdrsize:];
 	id := (int msg[0]<<8) | int msg[1];
-	c := chan of array of byte;
-	pidc := chan of int;
-	spawn reader(fd, c, pidc);
-	rpid := <-pidc;
-	spawn timer(c, pidc);
-	tpid := <-pidc;
-	dm: ref DNSmsg;
-	for(ntries := 0; ntries < 3; ntries++){
-		if(sys->write(fd, msg, len msg) != len msg)
-			break;
-		buf := <-c;
-		if(buf == nil)
-			continue;
-		dm = DNSmsg.unpack(buf);
-		if(dm != nil && (dm.flags & Fresp) && dm.id == id)
-			break;
-		dm = nil;
-	}
-	kill(tpid);
-	kill(rpid);
+	# No timer/kill: killing a blocked UDP read faults the native
+	# kernel.  A dead resolver leaves this process blocked; a live one
+	# answers normally.
+	if(sys->write(fd, msg, len msg) != len msg)
+		return (nil, sys->sprint("%s: write: %r", raddr));
+	buf := array[4096] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return (nil, sys->sprint("%s: no reply", raddr));
+	dm := DNSmsg.unpack(buf[0:n]);
+	if(dm == nil)
+		return (nil, sys->sprint("%s: bad reply", raddr));
+	if(!(dm.flags & Fresp) || dm.id != id)
+		return (nil, sys->sprint("%s: bad reply id", raddr));
 	if(dm == nil)
 		return (nil, sys->sprint("%s: no reply", raddr));
 	if(dm.err != nil)

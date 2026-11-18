@@ -20,6 +20,16 @@ Timed: module
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
+Cs: module
+{
+	init:	fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
+Dns: module
+{
+	init:	fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
 Mount: module
 {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -67,6 +77,7 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 	sys->bind("#t", "/dev", sys->MAFTER);	# serial line
 	sys->bind("#c", "/dev", sys->MAFTER); 	# console device
 	sys->bind("#W","/dev",sys->MAFTER);	# Flash
+	sys->create("/net.alt", Sys->OREAD, 8r777|Sys->DMDIR);
 #	sys->bind("#O", "/dev", sys->MAFTER);	# Modem
 #	sys->bind("#T","/dev",sys->MAFTER);	# Touchscreen
 
@@ -77,9 +88,11 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 	firstboot();
 	svcstart();
 	gemstart(drawcontext);
+	sys->sleep(500);
+	dnsstart(drawcontext);
 	srv();
 
-	spawn shell->init(nil, nil);
+	spawn shell->init(nil, "sh" :: "-n" :: nil);
 }
 
 # Mount the kfs64 on the virtio-blk disk as the root filesystem.
@@ -235,6 +248,62 @@ svcstart()
 	spawn svcd->init(nil, "svcd" :: nil);
 }
 
+# Connection server: resolves names from the ndb files.  ndb/dns is
+# not started in the native kernel yet (its UDP path faults), so
+# unqualified sys= names resolve and domain names do not.
+# True if a dns= resolver is configured (net.conf -> /net/ndb, or
+# /lib/ndb/local).  Without one, dns would recurse from the roots,
+# which the native kernel cannot do yet; cs alone still resolves the
+# sys= names in the ndb files.
+dnsconfigured(): int
+{
+	if(hasedns("/net/ndb"))
+		return 1;
+	return hasedns("/lib/ndb/local");
+}
+
+hasedns(path: string): int
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[4096] of byte;
+	n := sys->read(fd, buf, len buf);
+	fd = nil;
+	if(n <= 0)
+		return 0;
+	(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+	for(; lines != nil; lines = tl lines){
+		l := hd lines;
+		while(len l > 0 && (l[0] == ' ' || l[0] == '\t'))
+			l = l[1:];
+		if(len l >= 4 && l[0:4] == "dns=")
+			return 1;
+	}
+	return 0;
+}
+
+dnsstart(ctxt: ref Draw->Context)
+{
+	if(dnsconfigured()){
+		d := load Dns "/dis/ndb/dns.dis";
+		if(d == nil)
+			sys->print("init: no /dis/ndb/dns.dis: %r\n");
+		else{
+			# -h: no host resolver; -r: forward to dns=;
+			# -d: ordinary UDP (no hosted header layout).
+			spawn d->init(ctxt, "dns" :: "-h" :: "-r" :: "-d" :: nil);
+			sys->print("init: dns forwarding\n");
+		}
+	}
+	c := load Cs "/dis/ndb/cs.dis";
+	if(c == nil){
+		sys->print("init: no /dis/ndb/cs.dis: %r\n");
+		return;
+	}
+	spawn c->init(ctxt, "cs" :: nil);
+}
+
 # Wall-clock service: boot source, SNTP when configured, and the
 # /n/time/{now,status,ctl} namespace.
 timedstart(ctxt: ref Draw->Context)
@@ -270,7 +339,7 @@ netstart()
 	fd: ref Sys->FD;
 	buf: array of byte;
 	n: int;
-	ip, mask, cmd: string;
+	ip, mask, cmd, dns: string;
 	nlines: int;
 	lines: list of string;
 
@@ -294,6 +363,8 @@ netstart()
 			mask = val;
 		"cmd" =>
 			cmd = val;
+		"dns" =>
+			dns = val;
 		}
 	}
 	if(ip == nil || mask == nil)
@@ -309,6 +380,18 @@ netstart()
 		sys->print("net: add %s: %r\n", ip);
 	else
 		sys->print("net: %s %s\n", ip, mask);
+	if(dns != nil){
+		nfd := sys->open("/net/ndb", Sys->OWRITE);
+		if(nfd == nil)
+			sys->print("net: open /net/ndb: %r\n");
+		else{
+			if(sys->fprint(nfd, "infernosite=\n\tdns=%s\n", dns) < 0)
+				sys->print("net: dns=%s: %r\n", dns);
+			else
+				sys->print("net: dns %s\n", dns);
+			nfd = nil;
+		}
+	}
 	if(cmd != nil){
 		sh := load Sh "/dis/sh.dis";
 		if(sh == nil)

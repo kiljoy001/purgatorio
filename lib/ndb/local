@@ -6,6 +6,8 @@ database=
 
 #
 # default site-wide resources
+sys=capsule ip=10.0.0.2
+sys=localhost ip=127.0.0.1
 #
 infernosite=
 	#dnsdomain=your.domain.com

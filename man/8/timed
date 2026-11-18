@@ -45,8 +45,10 @@ Cloudflare
 .BR 162.159.200.1 ,
 and Google
 .BR 216.239.35.0 .
-Each query has a two-second timeout, so an isolated or filtered network
-falls back to the boot clock instead of stalling.  After a successful exchange it computes
+The query runs in its own process.  If a server never answers, that
+process remains blocked and no further attempts are made until
+restart; the boot clock stays in place and status keeps being
+published.  A reachable server answers immediately.  After a successful exchange it computes
 offset and round-trip delay from the four timestamps and steps
 .B /dev/time
 when the offset exceeds one second, or when the clock has not yet been
@@ -115,7 +117,9 @@ last published state
 Offsets are stepped, not slewed, so a later correction can move the
 wall clock backwards.  Leap seconds, NTP authentication and server
 selection by stratum are not implemented; SNTP replies are accepted
-from the first configured server that answers.  The default list is
+from the first configured server that answers.  A blackholed server
+leaves one query process blocked and disables further SNTP attempts
+until restart.  The default list is
 unauthenticated and reveals the guest's address to those operators;
 use
 .B /lib/ndb/time
