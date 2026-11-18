@@ -471,6 +471,7 @@ root
 	/dis/lib/dhcpclient.dis
 	/dis/lib/dial.dis
 	/dis/lib/merkle.dis
+	/dis/lib/monosigner.dis
 	/dis/lib/monoauth.dis
 	/dis/lib/dialog.dis
 	/dis/lib/dict.dis

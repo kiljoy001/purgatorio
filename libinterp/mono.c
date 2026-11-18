@@ -233,6 +233,56 @@ Mono_edcheck(void *fp)
 }
 
 void
+Mono_argon2(void *fp)
+{
+	F_Mono_argon2 *f;
+	uchar *pass, *salt, *work, hash[32];
+	int passn, saltn;
+	crypto_argon2_config cfg;
+	crypto_argon2_inputs in;
+
+	f = fp;
+	pass = abytes(f->pass, &passn);
+	salt = abytes(f->salt, &saltn);
+	if(f->nb_blocks < 8 || f->nb_passes < 1 || saltn < 8){
+		badargs(f->ret, nil, "mono: argon2 needs >=8 blocks, >=1 pass, salt >=8");
+		return;
+	}
+	work = malloc((size_t)f->nb_blocks * 1024);
+	if(work == nil){
+		badargs(f->ret, nil, "mono: out of memory");
+		return;
+	}
+	cfg.algorithm = CRYPTO_ARGON2_ID;
+	cfg.nb_blocks = f->nb_blocks;
+	cfg.nb_passes = f->nb_passes;
+	cfg.nb_lanes = 1;
+	in.pass = pass;
+	in.pass_size = passn;
+	in.salt = salt;
+	in.salt_size = saltn;
+	crypto_argon2(hash, sizeof hash, work, cfg, in, crypto_argon2_no_extras);
+	crypto_wipe(work, (size_t)f->nb_blocks * 1024);
+	free(work);
+	setarr(f->ret, hash, sizeof hash);
+	crypto_wipe(hash, sizeof hash);
+}
+
+void
+Mono_wipe(void *fp)
+{
+	F_Mono_wipe *f;
+	uchar *a;
+	int n;
+
+	f = fp;
+	a = abytes(f->a, &n);
+	if(a != nil)
+		crypto_wipe(a, n);
+	*f->ret = 0;
+}
+
+void
 Mono_equal(void *fp)
 {
 	F_Mono_equal *f;

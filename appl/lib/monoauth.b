@@ -38,8 +38,8 @@ implement Monoauth;
 #	sk <64 bytes, hex>
 #	cert <64 bytes, hex>
 #
-# The signer file (/keydb/mono-signer) has the same sk line; its public
-# half (sk[32:64]) is what verifies every certificate.
+# Verifiers read the signer's public key from /keydb/mono-signer.pub and
+# never need the secret, which lives only on the issuing host.
 #
 
 include "sys.m";
@@ -58,6 +58,9 @@ include "merkle.m";
 
 include "daytime.m";
 	daytime: Daytime;
+
+include "monosigner.m";
+	sgn: Monosigner;
 
 include "monoauth.m";
 
@@ -284,7 +287,7 @@ parseepoch(s: string): (int, int, int, array of byte, array of byte)
 # loadproof builds an inclusion proof for this identity from the local
 # CA state.  A missing or stale epoch, an unenrolled key or a bad proof
 # leaves have=0, which restricts the identity to a box/ path.
-loadproof(id: ref Id, signerpk: array of byte): ref Proof
+loadproof(id: ref Id, signers: list of array of byte): ref Proof
 {
 	p := ref Proof;
 	p.have = 0;
@@ -309,7 +312,7 @@ loadproof(id: ref Id, signerpk: array of byte): ref Proof
 	if(now < t || now > t + w){
 		return p;
 	}
-	if(mono->edcheck(esig, signerpk, epochmsg(n, t, w, root)) != 1){
+	if(!certok(esig, signers, epochmsg(n, t, w, root))){
 		return p;
 	}
 	ls := readfile(MONOCA + "/leaves");
@@ -363,18 +366,18 @@ loadproof(id: ref Id, signerpk: array of byte): ref Proof
 	return p;
 }
 
-checkcommon(h: ref Hello, my: ref Id, signerpk: array of byte, now: int): string
+checkcommon(h: ref Hello, my: ref Id, signers: list of array of byte, now: int): string
 {
 	signed := cat(cat(array of byte h.name, array of byte "\n"), h.pk);
-	if(mono->edcheck(h.cert, signerpk, signed) != 1)
+	if(!certok(h.cert, signers, signed))
 		return "mono: peer certificate does not verify";
 	if(h.domain != my.domain || h.path != my.path)
 		return "mono: scope mismatch";
 	if(h.p.have){
 		if(h.p.exp != 0 && h.p.exp < now)
 			return "mono: identity has expired";
-		if(mono->edcheck(h.p.esig, signerpk,
-		   epochmsg(h.p.n, h.p.t, h.p.w, h.p.root)) != 1)
+		if(!certok(h.p.esig, signers,
+		   epochmsg(h.p.n, h.p.t, h.p.w, h.p.root)))
 			return "mono: epoch signature does not verify";
 		if(now < h.p.t || now > h.p.t + h.p.w)
 			return "mono: epoch is stale";
@@ -386,6 +389,16 @@ checkcommon(h: ref Hello, my: ref Id, signerpk: array of byte, now: int): string
 	}else if(!hasprefix(h.path, "box/"))
 		return "mono: no epoch proof outside box/";
 	return nil;
+}
+
+# certok accepts a signature from any currently trusted signer key, so a
+# rotation can add the new key before the old one stops being used.
+certok(sig: array of byte, signers: list of array of byte, msg: array of byte): int
+{
+	for(; signers != nil; signers = tl signers)
+		if(mono->edcheck(sig, hd signers, msg) == 1)
+			return 1;
+	return 0;
 }
 
 hashhello(c, s: array of byte): array of byte
@@ -711,17 +724,18 @@ link(keyfile: string, fd: ref Sys->FD, isserver: int): (ref Link, string)
 		return (nil, "cannot load " + Dial->PATH);
 	mk = load Merkle Merkle->PATH;
 	daytime = load Daytime Daytime->PATH;
-	if(mk == nil || daytime == nil)
-		return (nil, "cannot load merkle or daytime");
+	sgn = load Monosigner Monosigner->PATH;
+	if(mk == nil || daytime == nil || sgn == nil)
+		return (nil, "cannot load merkle, daytime or monosigner");
 
 	(me, err) := loadid(keyfile);
 	if(me == nil)
 		return (nil, err);
-	(signer, serr) := loadsigner();
-	if(signer == nil)
+	(signers, serr) := sgn->pubs(SIGNER);
+	if(signers == nil)
 		return (nil, serr);
 
-	p := loadproof(me, signer);
+	p := loadproof(me, signers);
 	if(!p.have && !hasprefix(me.path, "box/"))
 		return (nil, "mono: no epoch proof for " + me.path);
 
@@ -750,7 +764,7 @@ link(keyfile: string, fd: ref Sys->FD, isserver: int): (ref Link, string)
 		ssig := read64(fd);
 		if(ssig == nil)
 			return (nil, "handshake signature read");
-		e = checkcommon(sh, me, signer, daytime->now());
+		e = checkcommon(sh, me, signers, daytime->now());
 		if(e != nil)
 			return (nil, e);
 		if(mono->edcheck(ssig, sh.pk, signmsg(t)) != 1)
@@ -769,7 +783,7 @@ link(keyfile: string, fd: ref Sys->FD, isserver: int): (ref Link, string)
 		(ch, e) = parsehello(cb);
 		if(ch == nil)
 			return (nil, e);
-		e = checkcommon(ch, me, signer, daytime->now());
+		e = checkcommon(ch, me, signers, daytime->now());
 		if(e != nil)
 			return (nil, e);
 		sb := buildhello(me, p, ephpk);
@@ -1006,24 +1020,6 @@ loadid(keyfile: string): (ref Id, string)
 	if(id.path == "")
 		id.path = "box/default";
 	return (id, nil);
-}
-
-loadsigner(): (array of byte, string)
-{
-	data := readfile(SIGNER);
-	if(data == "")
-		return (nil, "cannot read " + SIGNER);
-	sk: array of byte;
-	for(s := data; len s > 0;){
-		(line, rest) := splitline(s);
-		s = rest;
-		(f, v) := splitfield(line);
-		if(f == "sk")
-			sk = hex2bytes(v);
-	}
-	if(sk == nil || len sk != 64)
-		return (nil, SIGNER + ": needs a 64-byte sk");
-	return (sk[32:64], nil);
 }
 
 # ---- utilities -------------------------------------------------------

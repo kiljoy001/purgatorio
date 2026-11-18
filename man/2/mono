@@ -1,6 +1,6 @@
 .TH MONO 2
 .SH NAME
-mono: aeadlock, aeadunlock, blake2b, x25519, edkeypair, edsign, edcheck, equal, version \- Monocypher cryptography
+mono: aeadlock, aeadunlock, blake2b, x25519, xpublic, edkeypair, edsign, edcheck, argon2, wipe, equal, version \- Monocypher cryptography
 .SH SYNOPSIS
 .EX
 include "mono.m";
@@ -15,6 +15,9 @@ xpublic:    fn(sk: array of byte): array of byte;
 edkeypair:  fn(seed: array of byte): (array of byte, array of byte);
 edsign:     fn(sk, msg: array of byte): array of byte;
 edcheck:    fn(sig, pk, msg: array of byte): int;
+argon2:     fn(pass, salt: array of byte, nb_blocks, nb_passes: int):
+                array of byte;
+wipe:       fn(a: array of byte): int;
 equal:      fn(a, b: array of byte): int;
 version:    fn(): string;
 .EE
@@ -77,6 +80,23 @@ signs with the secret key and returns 64 bytes;
 .B edcheck
 returns 1 if the signature is good and 0 otherwise.
 .PP
+.B argon2
+is Argon2id with one lane: it derives a 32-byte key from
+.I pass
+and
+.I salt
+(at least 8 bytes), using
+.I nb_blocks
+KiB of work area (at least 8) and
+.I nb_passes
+iterations.  The work area is allocated, used and wiped inside the
+module; it is not visible to Dis.
+.PP
+.B wipe
+overwrites an array with zeroes through the C library.  Limbo does not
+guarantee that a freed array is cleared, so secrets (keys, passwords,
+derived material) must be wiped explicitly.
+.PP
 .B equal
 compares two arrays in constant time (for tags and keys).
 .B version
@@ -102,6 +122,7 @@ mine := mono->x25519(mysk, theirpk);
 .br
 .B /libsec/port/monocypher.c
 .SH SEE ALSO
+.IR monosigner (2),
 .IR crypt (2),
 .IR keyring (2),
 .IR certify (8),

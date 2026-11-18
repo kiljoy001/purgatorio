@@ -6,6 +6,10 @@ certify \- create and inspect authentication certificates
 [
 .B \-f
 ]
+[
+.B \-k
+.I keyfile
+]
 .B init
 [
 .I owner
@@ -20,11 +24,21 @@ certify \- create and inspect authentication certificates
 .br
 .B certify firstboot
 .br
+.B certify resign
+.br
+.B certify rotate
+.br
+.B certify activate
+.br
 .B certify show
 .SH DESCRIPTION
 .I Certify
-makes the two files that Inferno's mutual authentication needs: a
-signer key for the machine, and one certificate per user.
+makes the files that Inferno's mutual authentication needs: a signer
+key for the machine, one certificate per user, and the EdDSA signer and
+epoch material used by
+.IR monoauth (8)
+and
+.IR monoca (8).
 .PP
 The authentication protocol
 .RB ( keyring-auth (2))
@@ -96,9 +110,69 @@ the console user (the name in
 if that is missing too.  This makes a freshly provisioned machine
 usable without an operator, at the cost of a key that differs from
 machine to machine.
+.SS Mono signer
+.B certify
+also maintains the EdDSA signer used by
+.IR monoauth (8)
+and
+.IR monoca (8).
+A fresh key is written to
+.B /keydb/mono-signer
+and its public half to
+.BR /keydb/mono-signer.pub .
+When a key-encryption key is available
+.RB ( \-k
+.IR keyfile ,
+or
+.B /n/host/keydb/mono.key
+when the host supplies one) the secret is encrypted at rest with
+Argon2id and XChaCha20-Poly1305; see
+.IR monosigner (2).
+The public file is mode 644 so verifiers can read it; the secret is
+mode 600.
+.B \-k
+names the key-encryption key for every command that touches the mono
+signer; without it the host default is used, and without either the
+secret is written in plaintext.
+Because
+.B firstboot
+now publishes a first epoch with
+.BR "monoca enroll" ,
+a provisioned machine authenticates immediately and
+.IR monoca (8)
+renews the epoch from then on.
+.SS Rotation
+.B certify rotate
+makes a new signer, stages it in
+.BR /keydb/mono-signer.next ,
+and adds its public key to the trusted list in
+.BR mono-signer.pub .
+Copy
+.B /keydb/mono-signer.next.pub
+to every node as
+.B /keydb/mono-signer.pub
+(or merge its pk line), then run
+.B certify activate
+on the issuing host.
+.B activate
+keeps the previous secret as
+.BR /keydb/mono-signer.old ,
+installs the staged one,
+.B resigns
+every local identity (the user's own key is unchanged; only the
+certificate is re-signed), and runs
+.B monoca publish
+so the next epoch is signed by the new key.  Both keys stay trusted
+until the old pk line is removed by hand.
+.PP
+.B certify resign
+can also be run on its own after a rotation, or to re-sign identities
+whose certificate was lost; identities on other hosts keep their old
+certificate until the command is run there.
 .SS Show
 .B certify show
-prints the signer key and every
+prints the RSA signer, the mono secret (and whether it is encrypted),
+the public file, the current public key and every
 .B /usr/*/keyring/default
 it can find.
 .SH SECURITY
@@ -142,9 +216,20 @@ certificate exchange.
 .IP \(bu
 The machine key created by
 .B firstboot
-is written into the root file system.  Clone an image
+is written into the root file system.  It is encrypted when the host
+supplies
+.BR /n/host/keydb/mono.key ,
+but that file is itself the key: a clone of the image plus the key file
+is a clone of the CA.  Clone an image
 .I before
 first boot, or every clone shares one signer key.
+.IP \(bu
+Rotation is a two-step operation for a reason: a node that has not
+received the new public key rejects certificates and epochs signed by
+it.  Distribute
+.B mono-signer.pub
+before
+.BR activate .
 .SH EXAMPLES
 Create the machine key and a certificate for the console user:
 .IP
@@ -185,8 +270,17 @@ from the certificate the client presented.
 .B /keydb/signerkey
 signer private key; root only
 .TP
+.B /keydb/mono-signer
+EdDSA signer secret; encrypted when a key file is available; root only
+.TP
+.B /keydb/mono-signer.pub
+trusted EdDSA public keys; mode 644
+.TP
 .BI /usr/ name /keyring/default
 user certificate
+.TP
+.BI /usr/ name /keyring/mono
+EdDSA identity: name, domain, path, secret key and certificate
 .SH SOURCE
 .B /appl/cmd/auth/certify.b
 .SH SEE ALSO
@@ -195,7 +289,10 @@ user certificate
 .IR cpu (1),
 .IR cpud (8),
 .IR keyring-auth (2),
-.IR createsignerkey (8)
+.IR createsignerkey (8),
+.IR monoauth (8),
+.IR monoca (8),
+.IR monosigner (2)
 .SH BUGS
 To withdraw a user, delete the certificate file; that only helps if the
 user has not kept a copy.  To withdraw everyone, replace

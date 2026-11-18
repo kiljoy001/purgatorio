@@ -40,8 +40,9 @@ version, name, pk, cert, ephemeral pk, domain, path, proof
 with one-byte lengths for the strings and fixed 32- and 64-byte fields.
 The certificate is an EdDSA signature over
 .IR name || "\en" || pk ,
-verified with the signer's public key (bytes 32 to 64 of
-.BR mono-signer ).
+verified with a key from
+.BR /keydb/mono-signer.pub ,
+which may list several keys while a signer is being rotated.
 The proof is
 .IP
 .EX
@@ -56,6 +57,15 @@ The epoch signature covers
 .IR "epoch1" || epoch || time || window || root
 and is verified with the same signer, so a proof is only useful if it
 was issued by the machine's signer.
+.PP
+A verifier never opens the secret:
+.B /keydb/mono-signer
+is needed only by
+.IR monoca (8)
+and
+.IR certify (8)
+on the issuing host, where it is encrypted at rest
+.RB ( monosigner (2)).
 .PP
 Both hellos are hashed into a transcript.  The server signs the
 transcript and the client verifies it with the server's key; the client
@@ -152,8 +162,8 @@ Both ends must then carry the same scope, or the handshake fails with
 .SH FILES
 .TF /usr/\fIname\fP/keyring/mono
 .TP
-.B /keydb/mono-signer
-EdDSA signer key (private half; root only)
+.B /keydb/mono-signer.pub
+trusted signer public keys, one pk line per key
 .TP
 .BI /usr/ name /keyring/mono
 name, domain, path, secret key and certificate
@@ -161,10 +171,14 @@ name, domain, path, secret key and certificate
 .B /keydb/monoca
 epoch, leaves and retained roots from
 .IR monoca (8)
+.TP
+.B /keydb/mono-signer
+the signer secret, on the issuing host only; root only
 .SH SOURCE
 .B /appl/lib/monoauth.b
 .SH SEE ALSO
 .IR mono (2),
+.IR monosigner (2),
 .IR merkle (2),
 .IR certify (8),
 .IR monoca (8),
@@ -186,7 +200,11 @@ not yet accept more than one session per link, and
 opens a fresh link for each invocation.
 .PP
 There is no rekeying and no keepalive; the record counter space is 2 to
-the 32.  An epoch is checked against the local clock only, so the clock
+the 32.  A signer rotation is not transparent to a host that has not
+received the updated
+.BR mono-signer.pub ;
+both keys are trusted during the change, and the old key should only be
+removed after a new epoch has been published.  An epoch is checked against the local clock only, so the clock
 must be disciplined (see
 .IR timed (8))
 for proofs to remain valid.

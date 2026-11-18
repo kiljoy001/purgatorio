@@ -244,6 +244,6 @@ cleanname.dis: $MODDIR/names.m
 vacfs.dis:	$MODDIR/vac.m $MODDIR/venti.m
 vacget.dis:	$MODDIR/vac.m $MODDIR/venti.m
 vacput.dis:	$MODDIR/vac.m $MODDIR/venti.m
-monoca.dis:	$MODDIR/mono.m $MODDIR/merkle.m
-monoauthtest.dis:	$MODDIR/mono.m $MODDIR/monoauth.m $MODDIR/merkle.m $MODDIR/dial.m
-mcheck.dis:	$MODDIR/mono.m $MODDIR/merkle.m
+monoca.dis:	$MODDIR/mono.m $MODDIR/merkle.m $MODDIR/monosigner.m
+monoauthtest.dis:	$MODDIR/mono.m $MODDIR/monoauth.m $MODDIR/merkle.m $MODDIR/monosigner.m $MODDIR/dial.m
+mcheck.dis:	$MODDIR/mono.m $MODDIR/merkle.m $MODDIR/monosigner.m

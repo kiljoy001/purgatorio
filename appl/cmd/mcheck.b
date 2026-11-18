@@ -1,6 +1,6 @@
 # mcheck -- independently verify a monoca epoch
 #
-# Reads /keydb/monoca/{leaves,epoch,roots} and /keydb/mono-signer, then:
+# Reads /keydb/monoca/{leaves,epoch,roots} and /keydb/mono-signer.pub, then:
 #   - checks the epoch signature with $Mono against the signer's public half
 #   - recomputes the Merkle root from the leaves
 #   - verifies an inclusion path for every leaf
@@ -22,6 +22,9 @@ include "mono.m";
 	mono: Mono;
 include "merkle.m";
 include "daytime.m";
+
+include "monosigner.m";
+	sgn: Monosigner;
 	daytime: Daytime;
 
 Mcheck: module
@@ -54,12 +57,20 @@ init(nil: ref Draw->Context, args: list of string)
 		return;
 	}
 
-	sk := signerkey();
-	if(sk == nil){
-		sys->print("mcheck: no signer key\n");
+	sgn = load Monosigner Monosigner->PATH;
+	if(sgn == nil){
+		sys->print("mcheck: cannot load " + Monosigner->PATH + "\n");
 		return;
 	}
-	pub := sk[32:64];
+	(pubs, e) := sgn->pubs(SIGNER);
+	if(pubs == nil){
+		sys->print("mcheck: no signer public key: %s\n", e);
+		return;
+	}
+	nkeys := 0;
+	for(kl := pubs; kl != nil; kl = tl kl)
+		nkeys++;
+	sys->print("signer keys: %d\n", nkeys);
 
 	now := 0;
 	if(daytime != nil)
@@ -67,7 +78,7 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->print("epoch %d time %d window %d now %d (fresh %d)\n",
 		n, t, w, now, t <= now && now <= t+w);
 	sys->print("epoch signature: %d (want 1)\n",
-		mono->edcheck(sig, pub, epochmsg(n, t, w, rroot)));
+		certok(sig, pubs, epochmsg(n, t, w, rroot)));
 
 	# Recompute the root from the leaves, with the same sort order.
 	leaves := readfile(DIR+"/leaves");
@@ -121,7 +132,7 @@ init(nil: ref Draw->Context, args: list of string)
 		(pn, pt, pw, pr, ps) := parseepoch(prev);
 		if(pr != nil && ps != nil)
 			sys->print("previous epoch %d signature: %d (want 1)\n",
-				pn, mono->edcheck(ps, pub, epochmsg(pn, pt, pw, pr)));
+				pn, certok(ps, pubs, epochmsg(pn, pt, pw, pr)));
 	}else
 		sys->print("previous epoch: none\n");
 
@@ -132,7 +143,7 @@ init(nil: ref Draw->Context, args: list of string)
 		bad[k] = sig[k];
 	bad[0] = byte (int bad[0] ^ 1);
 	sys->print("tampered signature: %d (want 0)\n",
-		mono->edcheck(bad, pub, epochmsg(n, t, w, rroot)));
+		certok(bad, pubs, epochmsg(n, t, w, rroot)));
 
 	present := arr[0];
 	pi := mk->insert(sl, present);
@@ -197,6 +208,14 @@ parseepoch(rec: string): (int, int, int, array of byte, array of byte)
 	return (n, t, w, r, sg);
 }
 
+certok(sig: array of byte, pubs: list of array of byte, msg: array of byte): int
+{
+	for(; pubs != nil; pubs = tl pubs)
+		if(mono->edcheck(sig, hd pubs, msg) == 1)
+			return 1;
+	return 0;
+}
+
 epochmsg(n, t, w: int, r: array of byte): array of byte
 {
 	msg := array[6+8+8+8+len r] of byte;
@@ -208,22 +227,6 @@ epochmsg(n, t, w: int, r: array of byte): array of byte
 	for(i = 0; i < len r; i++)
 		msg[30+i] = r[i];
 	return msg;
-}
-
-signerkey(): array of byte
-{
-	s := readfile(SIGNER);
-	for(; len s > 0;){
-		(rest, line) := nextline(s);
-		s = rest;
-		(fa, nf) := split(line, 2);
-		if(nf >= 2 && fa[0] == "sk"){
-			sk := hex2bytes(fa[1]);
-			if(len sk == 64)
-				return sk;
-		}
-	}
-	return nil;
 }
 
 sorted(l: list of array of byte): list of array of byte

@@ -11,11 +11,11 @@ re-reads
 .BR /keydb/monoca/epoch ,
 .BR /keydb/monoca/roots/\fIn\fP
 and
-.BR /keydb/mono-signer ,
+.BR /keydb/mono-signer.pub ,
 then reports:
 .IP \(bu
-whether the epoch record's signature verifies with the signer's public
-half;
+whether the epoch record's signature verifies with any key in
+.BR /keydb/mono-signer.pub ;
 .IP \(bu
 whether the root recomputed from the leaves equals the signed root;
 .IP \(bu
@@ -53,10 +53,11 @@ current signed record
 .B /keydb/monoca/roots/\fIn\fP
 retained previous records
 .TP
-.B /keydb/mono-signer
-EdDSA signer key
+.B /keydb/mono-signer.pub
+trusted EdDSA signer public keys
 .SH SOURCE
 .B /appl/cmd/mcheck.b
 .SH SEE ALSO
 .IR monoca (8),
-.IR mono (2)
+.IR mono (2),
+.IR monosigner (2)

@@ -40,3 +40,4 @@ DISBIN=$ROOT/dis/auth
 
 <$ROOT/mkfiles/mkdis
 <$ROOT/mkfiles/mksubdirs
+certify.dis:	$MODDIR/mono.m $MODDIR/monosigner.m

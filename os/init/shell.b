@@ -51,6 +51,11 @@ Certify: module
 	init:	fn(nil: ref Draw->Context, argv: list of string);
 };
 
+Monoca: module
+{
+	init:	fn(nil: ref Draw->Context, args: list of string);
+};
+
 init(drawcontext: ref Draw->Context, nil: list of string)
 {
 	shell := load Sh "/dis/sh.dis";
@@ -87,6 +92,7 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 	setclock();
 	timedstart(drawcontext);
 	firstboot();
+	monocastart(drawcontext);
 	svcstart();
 	gemstart(drawcontext);
 	sys->sleep(500);
@@ -318,6 +324,22 @@ timedstart(ctxt: ref Draw->Context)
 		return;
 	}
 	spawn t->init(ctxt, "timed" :: nil);
+}
+
+# Keep the monoca epoch fresh, so an unattended machine does not fail
+# closed half an hour after the last publish.  No signer yet (the image
+# before certify runs) means nothing to start.
+monocastart(ctxt: ref Draw->Context)
+{
+	(ok, nil) := sys->stat("/keydb/mono-signer");
+	if(ok < 0)
+		return;
+	m := load Monoca "/dis/monoca.dis";
+	if(m == nil){
+		sys->print("init: no /dis/monoca.dis: %r\n");
+		return;
+	}
+	spawn m->init(ctxt, "monoca" :: "daemon" :: nil);
 }
 
 # Start the Gemini server if the image carries it.  It reads the

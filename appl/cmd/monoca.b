@@ -3,17 +3,30 @@ implement Monoca;
 #
 # monoca -- issue and publish the identity set as a Merkle root
 #
-#	monoca enroll name [pkhex [exp]]	publish a new epoch with this leaf
-#					(pk and exp default to the user's keyring)
-#	monoca epoch			print the signed epoch record
-#	monoca root			print the current root
+#	monoca [-k keyfile] enroll name [pkhex [exp]]
+#	monoca [-k keyfile] revoke name
+#	monoca [-k keyfile] publish
+#	monoca epoch
+#	monoca root
+#	monoca status
+#	monoca [-k keyfile] daemon [-i seconds]
+#	monoca stop
 #
 # The authorised set is /keydb/monoca/leaves, one "name pkhex exp" per
 # line.  Each change sorts the leaves by hash, computes the root and
-# signs an epoch record with /keydb/mono-signer (tpm9p later).
+# signs an epoch record with the signer in /keydb/mono-signer; the
+# public half goes to /keydb/mono-signer.pub, which is all a verifier
+# needs.  When a key file is available the signer is encrypted at rest
+# (see monosigner(2)).
 #
 # The signature domain is "epoch1\0" || epoch || time || window || root,
 # so an epoch signature can never be confused with an identity one.
+#
+# A daemon republishes when the leaves change or when the epoch is half
+# way through its window, so an unattended CA does not silently age out
+# and reduce every identity to the box/ scope.  Enroll, revoke and
+# publish take a lock in /keydb/monoca/lock, so there is one writer at
+# a time.
 #
 
 include "sys.m";
@@ -25,6 +38,8 @@ include "merkle.m";
 	merkle: Merkle;
 include "daytime.m";
 	daytime: Daytime;
+include "monosigner.m";
+	sgn: Monosigner;
 
 Monoca: module
 {
@@ -33,7 +48,10 @@ Monoca: module
 
 DIR:	con "/keydb/monoca";
 SIGNER:	con "/keydb/mono-signer";
+LOCK:	con "/keydb/monoca/lock";
 WINDOW:	con 3600;
+
+keyfile: string;
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -41,25 +59,50 @@ init(nil: ref Draw->Context, args: list of string)
 	mono = load Mono Mono->PATH;
 	merkle = load Merkle Merkle->PATH;
 	daytime = load Daytime Daytime->PATH;
-	if(mono == nil || merkle == nil || daytime == nil){
-		sys->fprint(sys->fildes(2), "monoca: cannot load a module: %r\n");
+	sgn = load Monosigner Monosigner->PATH;
+	if(mono == nil || merkle == nil || daytime == nil || sgn == nil){
+		sys->fprint(sys->fildes(2), "monoca: cannot load a module\n");
 		return;
 	}
-	if(args == nil || tl args == nil){
+	if(args == nil)
+		return;
+	argv := tl args;
+	while(argv != nil){
+		o := hd argv;
+		if(len o == 0 || o[0] != '-')
+			break;
+		argv = tl argv;
+		if(o == "-k" && argv != nil){
+			keyfile = hd argv;
+			argv = tl argv;
+		}else{
+			usage();
+			return;
+		}
+	}
+	if(argv == nil){
 		usage();
 		return;
 	}
-	cmd := hd tl args;
-	rest := tl tl args;
+	cmd := hd argv;
+	rest := tl argv;
 	case cmd {
 	"enroll" =>
 		enroll(rest);
 	"revoke" =>
 		revoke(rest);
+	"publish" =>
+		publish(getsk());
 	"epoch" =>
 		cat(DIR + "/epoch");
 	"root" =>
 		cat(DIR + "/root");
+	"status" =>
+		status();
+	"daemon" =>
+		daemon(rest);
+	"stop" =>
+		stop();
 	* =>
 		usage();
 	}
@@ -67,8 +110,11 @@ init(nil: ref Draw->Context, args: list of string)
 
 usage()
 {
-	sys->fprint(sys->fildes(2), "usage: monoca enroll name [pkhex [exp]] | revoke name | epoch | root\n");
+	sys->fprint(sys->fildes(2),
+		"usage: monoca [-k keyfile] enroll name [pkhex [exp]] | revoke name | publish | epoch | root | status | daemon [-i secs] | stop\n");
 }
+
+# ---- commands --------------------------------------------------------
 
 # enroll adds a leaf and publishes a new epoch.  Re-enrolling a name
 # replaces its old leaf, so key rotation removes the old key from the
@@ -92,11 +138,21 @@ enroll(args: list of string): int
 		sys->fprint(sys->fildes(2), "monoca: pk must be 32 bytes of hex\n");
 		return -1;
 	}
+	sk := getsk();
+	if(sk == nil)
+		return -1;
 	mkdir(DIR);
+	fd := lockwait();
+	if(fd == nil){
+		sys->fprint(sys->fildes(2), "monoca: cannot lock %s\n", LOCK);
+		return -1;
+	}
 	old := readfile(DIR + "/leaves");
 	writefile(DIR + "/leaves",
 		dropname(old, name) + name + " " + pkhex + " " + string exp + "\n");
-	return publish();
+	r := publishlocked(sk);
+	unlock(fd);
+	return r;
 }
 
 # The public half of the identity key is bytes 32 to 64 of the sk line
@@ -130,14 +186,143 @@ revoke(args: list of string): int
 		return -1;
 	}
 	name := hd args;
+	sk := getsk();
+	if(sk == nil)
+		return -1;
 	mkdir(DIR);
+	fd := lockwait();
+	if(fd == nil){
+		sys->fprint(sys->fildes(2), "monoca: cannot lock %s\n", LOCK);
+		return -1;
+	}
 	old := readfile(DIR + "/leaves");
 	writefile(DIR + "/leaves", dropname(old, name));
-	return publish();
+	r := publishlocked(sk);
+	unlock(fd);
+	return r;
 }
 
-# publish sorts the leaves, computes the root and signs a new epoch.
-publish(): int
+# publish signs the current leaves, taking the writer lock.
+publish(sk: array of byte): int
+{
+	if(sk == nil)
+		return -1;
+	fd := lockwait();
+	if(fd == nil){
+		sys->fprint(sys->fildes(2), "monoca: cannot lock %s\n", LOCK);
+		return -1;
+	}
+	r := publishlocked(sk);
+	unlock(fd);
+	return r;
+}
+
+daemon(args: list of string): int
+{
+	interval := 5;
+	if(args != nil){
+		if(hd args != "-i" || tl args == nil){
+			usage();
+			return -1;
+		}
+		interval = int hd tl args;
+		if(interval < 1)
+			interval = 1;
+	}
+	if((p := int readfile(DIR + "/daemon")) > 0){
+		(ok, nil) := sys->stat("/prog/" + string p);
+		if(ok >= 0){
+			sys->fprint(sys->fildes(2), "monoca: daemon %d is already running\n", p);
+			return -1;
+		}
+	}
+	sk := getsk();
+	if(sk == nil)
+		return -1;
+	mkdir(DIR);
+	writefile(DIR + "/daemon", string sys->pctl(0, nil) + "\n");
+	last: array of byte;
+	for(;;){
+		fd := lockwait();
+		if(fd == nil){
+			sys->sleep(interval * 1000);
+			continue;
+		}
+		d := leavesdigest();
+		renew := 0;
+		if(d != nil){
+			if(staleepoch())
+				renew = 1;
+			else if(last != nil && mono->equal(d, last) != 1)
+				renew = 1;
+		}
+		if(renew){
+			if(publishlocked(sk) == 0)
+				last = d;
+		}else if(d != nil)
+			last = d;
+		unlock(fd);
+		sys->sleep(interval * 1000);
+	}
+	return 0;
+}
+
+stop()
+{
+	pid := int readfile(DIR + "/daemon");
+	if(pid <= 0){
+		sys->fprint(sys->fildes(2), "monoca: no daemon\n");
+		return;
+	}
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd == nil){
+		sys->fprint(sys->fildes(2), "monoca: daemon %d is gone\n", pid);
+		sys->remove(DIR + "/daemon");
+		return;
+	}
+	sys->fprint(fd, "kill");
+	fd = nil;
+	sys->remove(DIR + "/daemon");
+	sys->print("monoca: stopped daemon %d\n", pid);
+}
+
+status()
+{
+	s := readfile(DIR + "/epoch");
+	n := 0;
+	t := 0;
+	w := 0;
+	root: array of byte;
+	for(; len s > 0;){
+		(rest, line) := nextline(s);
+		s = rest;
+		(f, v) := splitfield(line);
+		case f {
+		"epoch" => n = int v;
+		"time" => t = int v;
+		"window" => w = int v;
+		"root" => root = hex2bytes(v);
+		}
+	}
+	now := daytime->now();
+	sys->print("epoch %d time %d age %d window %d fresh %d\n",
+		n, t, now - t, w, n > 0 && now <= t + w);
+	if(root != nil && len root == 32)
+		sys->print("root %s\n", bytes2hex(root));
+	sys->print("leaves %d\n", nleaves());
+	(ps, e) := sgn->pubs(SIGNER);
+	if(ps == nil)
+		sys->print("signer none (%s)\n", e);
+	else
+		for(; ps != nil; ps = tl ps)
+			sys->print("signer %s\n", bytes2hex(hd ps));
+}
+
+# ---- epoch -----------------------------------------------------------
+
+# publishlocked sorts the leaves, computes the root and signs a new
+# epoch.  The caller holds the lock.
+publishlocked(sk: array of byte): int
 {
 	lines := readfile(DIR + "/leaves");
 	l: list of array of byte;
@@ -160,11 +345,6 @@ publish(): int
 	r := merkle->root(sl);
 	if(r == nil){
 		sys->fprint(sys->fildes(2), "monoca: no root\n");
-		return -1;
-	}
-	sk := signer();
-	if(sk == nil){
-		sys->fprint(sys->fildes(2), "monoca: cannot read %s\n", SIGNER);
 		return -1;
 	}
 	n := epochno() + 1;
@@ -211,20 +391,87 @@ epochno(): int
 	return int fa[1];
 }
 
-signer(): array of byte
+epochtime(): int
 {
-	s := readfile(SIGNER);
+	s := readfile(DIR + "/epoch");
 	for(; len s > 0;){
-		(nl, i) := nextline(s);
-		s = nl;
-		(fa, nf) := split(i, 2);
-		if(nf >= 2 && fa[0] == "sk"){
-			sk := hex2bytes(fa[1]);
-			if(len sk == 64)
-				return sk;
+		(rest, line) := nextline(s);
+		s = rest;
+		(f, v) := splitfield(line);
+		if(f == "time")
+			return int v;
+	}
+	return 0;
+}
+
+# staleepoch is true when there is no epoch or when half its window has
+# passed, which is when the daemon republishes.
+staleepoch(): int
+{
+	t := epochtime();
+	if(t == 0)
+		return 1;
+	return daytime->now() - t >= WINDOW / 2;
+}
+
+leavesdigest(): array of byte
+{
+	(ok, nil) := sys->stat(DIR + "/leaves");
+	if(ok < 0)
+		return nil;
+	return mono->blake2b(array of byte readfile(DIR + "/leaves"), nil, 32);
+}
+
+nleaves(): int
+{
+	n := 0;
+	s := readfile(DIR + "/leaves");
+	for(; len s > 0;){
+		(rest, line) := nextline(s);
+		s = rest;
+		(fa, nf) := split(line, 3);
+		if(nf >= 3)
+			n++;
+	}
+	return n;
+}
+
+getsk(): array of byte
+{
+	(sk, e) := sgn->secret(SIGNER, keyfile);
+	if(sk == nil){
+		sys->fprint(sys->fildes(2), "monoca: %s\n", e);
+		return nil;
+	}
+	return sk;
+}
+
+# ---- writer lock -----------------------------------------------------
+
+lockwait(): ref Sys->FD
+{
+	mkdir(DIR);
+	for(i := 0; i < 100; i++){
+		fd := sys->create(LOCK, Sys->OWRITE|Sys->OEXCL, 8r600);
+		if(fd != nil){
+			sys->fprint(fd, "%d\n", sys->pctl(0, nil));
+			return fd;
 		}
+		pid := int readfile(LOCK);
+		if(pid > 0){
+			(ok, nil) := sys->stat("/prog/" + string pid);
+			if(ok < 0)
+				sys->remove(LOCK);
+		}
+		sys->sleep(100);
 	}
 	return nil;
+}
+
+unlock(fd: ref Sys->FD)
+{
+	fd = nil;
+	sys->remove(LOCK);
 }
 
 # ---- helpers ---------------------------------------------------------
@@ -310,6 +557,22 @@ nextline(s: string): (string, string)
 		if(s[i] == '\n')
 			return (s[i+1:], s[0:i]);
 	return ("", s);
+}
+
+splitfield(line: string): (string, string)
+{
+	i := 0;
+	while(i < len line && (line[i] == ' ' || line[i] == '\t'))
+		i++;
+	j := i;
+	while(j < len line && line[j] != ' ' && line[j] != '\t')
+		j++;
+	k := j;
+	while(k < len line && (line[k] == ' ' || line[k] == '\t'))
+		k++;
+	if(i == j)
+		return ("", "");
+	return (line[i:j], line[k:]);
 }
 
 # split into at most n whitespace-separated fields

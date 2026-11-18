@@ -3,20 +3,52 @@
 monoca \- publish the authorised identity set as a signed Merkle root
 .SH SYNOPSIS
 .B monoca
+[
+.B \-k
+.I keyfile
+]
 .B enroll
 .I name
 .RI [ pkhex
 .RI [ exp ]]
 .br
 .B monoca
+[
+.B \-k
+.I keyfile
+]
 .B revoke
 .I name
+.br
+.B monoca
+[
+.B \-k
+.I keyfile
+]
+.B publish
 .br
 .B monoca
 .B epoch
 .br
 .B monoca
 .B root
+.br
+.B monoca
+.B status
+.br
+.B monoca
+[
+.B \-k
+.I keyfile
+]
+.B daemon
+[
+.B \-i
+.I seconds
+]
+.br
+.B monoca
+.B stop
 .SH DESCRIPTION
 .B monoca
 maintains the set of identities a fleet trusts.  Each identity is a
@@ -55,7 +87,7 @@ The signature is EdDSA over
 .IP
 with each integer 8 bytes big-endian, so an epoch signature cannot be
 confused with an identity signature.
-.PP
+.SS Commands
 .B enroll
 adds a leaf.  Re-enrolling a name replaces its previous leaf, so key
 rotation removes the old key from the authorised set rather than
@@ -73,22 +105,71 @@ defaults to 0 (never expires).
 .B revoke
 removes every leaf for
 .IR name .
+Both write the leaves and publish a new epoch under a writer lock.
+.PP
+.B publish
+re-signs the current leaves without changing them.  It is what
+.IR certify (8)
+runs after a signer rotation.
 .B epoch
 prints the signed record and
 .B root
 prints the current root in hex.
+.B status
+prints the epoch number, time, age, window, freshness, leaf count and
+every trusted signer key.
+.SS Daemon
+.B daemon
+publishes when the leaves change or when half the epoch window has
+passed, so an unattended CA does not silently age out and reduce every
+identity to the
+.B box/
+scope.  It writes its pid to
+.BR /keydb/monoca/daemon ,
+refuses to start when another daemon is alive, and sleeps
+.I seconds
+(default 5) between checks.
+.B stop
+kills it through
+.BR /prog/\fIpid\fP/ctl .
+.PP
+Enroll, revoke, publish and the daemon all take
+.BR /keydb/monoca/lock
+with
+.BR OEXCL ,
+so there is one writer at a time; a lock left by a dead process is
+removed by checking
+.BR /prog/\fIpid\fP .
+The kernel's init starts the daemon after
+.IR certify (8)
+firstboot has made a signer, when the image has one.
+.SS Signer
+The epoch is signed with
+.BR /keydb/mono-signer .
+That file is encrypted at rest when a key-encryption key is available:
+.B \-k
+.IR keyfile ,
+or
+.B /n/host/keydb/mono.key
+when the host supplies one.  The format and the key derivation are in
+.IR monosigner (2).
+The public half is
+.BR /keydb/mono-signer.pub ,
+which is all a verifier needs; it may hold several keys during a
+rotation.  The daemon decrypts the secret once at start, so the
+plaintext key exists only in its memory.
 .PP
 The record being replaced is retained as
 .BI roots/ n\fR,
 so a token minted in the previous epoch can still be checked during the
 grace window by
-.IR mcheck (1).  A verifier accepts only the current or the previous
-epoch, and only until
-.IR time\ +\ window ;
-without a current record it must fail closed rather than accept a
-stale root.
+.IR mcheck (1).
+A verifier accepts a proof only while
+.IR time\ +\ window
+has not passed; without a verifiable epoch it fails closed rather than
+accepting a stale root.
 .SH FILES
-.TF /keydb/monoca/epoch
+.TF /keydb/monoca/roots/\fIn\fP
 .TP
 .B /keydb/monoca/leaves
 authorised set, one
@@ -104,25 +185,41 @@ current root, for convenience
 .B /keydb/monoca/roots/\fIn\fP
 retained previous records
 .TP
+.B /keydb/monoca/lock
+writer lock
+.TP
+.B /keydb/monoca/daemon
+pid of the running daemon
+.TP
 .B /keydb/mono-signer
-EdDSA signer key (private half; root only)
+EdDSA secret key, encrypted when a key file is available
+.TP
+.B /keydb/mono-signer.pub
+trusted public keys
 .SH SOURCE
 .B /appl/cmd/monoca.b
 .SH SEE ALSO
 .IR mcheck (1),
 .IR mono (2),
+.IR monosigner (2),
 .IR monoauth (8),
 .IR certify (8)
 .SH BUGS
 There is no 9P server yet: the records are files under
 .BR /keydb/monoca ,
-not a served file tree, and nothing re-signs on a heartbeat, so an
-idle CA's epoch ages out of its window.  The signer is read from
-.B /keydb/mono-signer
-until
-.I tpm9p
-supplies a sealed key.
+not a served file tree.  Distribution of
+.B leaves
+and
+.B epoch
+to the peers is still a copy; only
+.B mono-signer.pub
+is read from a single place per host.
 .PP
 An epoch is a full tree rebuild, so enrolling many identities is linear
 in the set size; that is adequate for a fleet and is the first thing to
 replace with an incremental tree if it stops being so.
+.PP
+An epoch is checked against the local clock, so a machine whose clock
+is not disciplined
+.RB ( timed (8))
+will treat epochs as stale or not yet valid.

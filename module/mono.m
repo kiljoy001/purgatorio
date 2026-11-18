@@ -31,6 +31,15 @@ Mono: module
 	edcheck:	fn(sig: array of byte, pk: array of byte, msg: array of byte):
 			   int;
 
+	# Argon2id, one lane, 32-byte result.  nb_blocks is the work area
+	# in 1 KiB blocks (>= 8); nb_passes is the time cost (>= 1).
+	argon2:		fn(pass: array of byte, salt: array of byte,
+			   nb_blocks, nb_passes: int): array of byte;
+
+	# Zero a buffer.  Dis arrays are not cleared when they are freed,
+	# so secrets have to be wiped explicitly.
+	wipe:		fn(a: array of byte): int;
+
 	# Constant-time equality, for comparing tags and keys.
 	equal:		fn(a: array of byte, b: array of byte): int;
 

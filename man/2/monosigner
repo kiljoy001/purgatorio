@@ -1,0 +1,117 @@
+.TH MONOSIGNER 2
+.SH NAME
+monosigner: secret, pub, pubs, addpub, save, pkof, keypath \- the monoca signer key
+.SH SYNOPSIS
+.EX
+include "monosigner.m";
+sgn := load Monosigner Monosigner->PATH;
+
+secret: fn(path, keyfile: string): (array of byte, string);
+pub:    fn(path: string): (array of byte, string);
+pubs:   fn(path: string): (list of array of byte, string);
+addpub: fn(path: string, pk: array of byte): string;
+save:   fn(path, keyfile: string, sk: array of byte): string;
+pkof:   fn(sk: array of byte): array of byte;
+keypath: fn(explicit: string): string;
+.EE
+.SH DESCRIPTION
+.I Monosigner
+owns the file formats around the monoca signer key, so that the CA
+commands share one implementation and verifiers never open the secret.
+.PP
+The secret lives in
+.IR path
+(conventionally
+.BR /keydb/mono-signer ).
+A plaintext file is one line:
+.IP
+.EX
+sk \fI128 hex chars\fP
+.EE
+.IP
+An encrypted file records how to derive its key:
+.IP
+.EX
+signer 2
+kdf argon2id
+salt \fI16 bytes, hex\fP
+blocks 1024
+passes 3
+nonce \fI24 bytes, hex\fP
+tag \fI16 bytes, hex\fP
+ct \fI64 bytes, hex\fP
+.EE
+.IP
+The ciphertext is the 64-byte EdDSA secret key under XChaCha20-Poly1305
+.RB ( aeadlock ,
+.IR mono (2)),
+and the record key is Argon2id over the key file's contents and the
+salt.  The parameters are stored with the record, so they can be raised
+later without breaking old files.
+.PP
+.B secret
+returns the 64-byte secret key, decrypting when needed.  The
+key-encryption key comes from
+.I keyfile
+when it is not empty, otherwise from
+.B /n/host/keydb/mono.key
+when that exists.  The file holds either 64 hex characters (a raw
+32-byte key) or a passphrase.  A plaintext signer is accepted as it is.
+Derived keys and the passphrase are wiped before returning.
+.PP
+.B pub
+returns the first trusted public key, and
+.B pubs
+returns all of them: it reads
+.IB path .pub
+and expects one
+.IP
+.EX
+pk \fI64 hex chars\fP
+.EE
+.IP
+line per key, falling back to deriving the public half from the secret
+when the public file is missing.  A rotation adds the new key with
+.B addpub
+before the old one is retired, so certificates and epochs signed by
+either key keep verifying during the change.
+.PP
+.B save
+writes
+.I sk
+to
+.I path
+(encrypted when a key is available) and publishes its public half in
+.IB path .pub
+with mode 644.  The secret file is written with mode 600.
+.B pkof
+returns bytes 32 to 64 of a 64-byte secret key;
+.B keypath
+resolves the key file from an explicit name or the default.
+.SH FILES
+.TF /n/host/keydb/mono.key
+.TP
+.B /keydb/mono-signer
+the secret, plaintext or encrypted; mode 600
+.TP
+.B /keydb/mono-signer.pub
+one or more trusted public keys; mode 644
+.TP
+.B /n/host/keydb/mono.key
+default key-encryption key, supplied by the host
+.SH SOURCE
+.B /appl/lib/monosigner.b
+.SH SEE ALSO
+.IR mono (2),
+.IR monoca (8),
+.IR monoauth (8),
+.IR certify (8)
+.SH BUGS
+A passphrase is only as strong as Argon2id with 1024 blocks and three
+passes, about a megabyte and a few milliseconds; the raw-key form is
+preferred for unattended machines.
+.PP
+The public file has no revocation date: keys are added and removed by
+editing the file.  Removing a key that signed the current epoch makes
+that epoch unverifiable, so retire an old key only after a new epoch
+has been published and distributed.
