@@ -39,4 +39,10 @@ TLS: module
 
 	# ECDSA P-256 / SHA-256 signature (ASN.1 DER) over msg.
 	sign: fn(key: array of byte, msg: array of byte): array of byte;
+
+	# Verify an ASN.1 ECDSA P-256/SHA-256 signature over a 32-byte
+	# hash.  pub is the 65-byte uncompressed point (04||X||Y).
+	# Returns 1 if the signature is valid.
+	ecverify: fn(pub: array of byte, hash: array of byte,
+		sig: array of byte): int;
 };

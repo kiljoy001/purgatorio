@@ -1,13 +1,15 @@
 /*
  *  $TLS -- TLS 1.2 server sessions from the vendored BearSSL subset.
  *
- *  This is kernel-only: it is compiled into os/pc and registered in
- *  pc.c, so a Dis program can accept a TLS connection without a native
- *  helper.  Certificates are self-signed ECDSA P-256 leaves minted by
- *  certgen; the caller persists the returned DER and scalar.
+ *  This file is shared by the native kernel (os/pc) and the hosted
+ *  emulator (emu): a Dis program can accept a TLS connection without a
+ *  native helper on either.  Certificates are self-signed ECDSA P-256
+ *  leaves minted by certgen; the caller persists the returned DER and
+ *  scalar.
  *
  *  BearSSL is freestanding, but it uses #if, which 8c's cpp does not
- *  understand.  os/pc builds tls.c in two steps: gcc -E, then 8c.
+ *  understand.  The kernel builds tls.c in two steps: gcc -E, then 8c.
+ *  The emulator is compiled by the host cc and needs no preprocessing.
  */
 
 #define _BEAR9_H
@@ -303,6 +305,7 @@ certgen(char *cn, char *notbefore, char *notafter,
 	br_hmac_drbg_context rng;
 	br_ec_private_key sk;
 	br_ec_public_key pk;
+	int ok;
 	unsigned char seed[32], kbuf[BR_EC_KBUF_PRIV_MAX_SIZE];
 	unsigned char pubbuf[BR_EC_KBUF_PUB_MAX_SIZE];
 	unsigned char serial[8], hash[32], sig[SIGMAX];
@@ -669,6 +672,28 @@ ghash_plan9(void *y, const void *h, const void *data, size_t len)
 		}
 		gfmul(yy, hh);
 	}
+}
+
+void
+TLS_ecverify(void *fp)
+{
+	F_TLS_ecverify *f;
+	br_ec_public_key pk;
+	int ok;
+
+	f = fp;
+	*f->ret = 0;
+	if(f->pub == H || f->hash == H || f->sig == H)
+		return;
+	if(f->pub->len != 65 || f->pub->data[0] != 0x04 ||
+	   f->hash->len != 32 || f->sig->len == 0)
+		return;
+	pk.curve = BR_EC_secp256r1;
+	pk.q = f->pub->data;
+	pk.qlen = 65;
+	ok = br_ecdsa_i15_vrfy_asn1(&br_ec_p256_m15,
+		f->hash->data, 32, &pk, f->sig->data, f->sig->len);
+	*f->ret = ok;
 }
 
 void

@@ -1,0 +1,50 @@
+.TH TLSGET 1
+.SH NAME
+tlsget \- fetch a Gemini URL over TLS 1.3 from Dis
+.SH SYNOPSIS
+.B tlsget
+.I host[!port]
+.RI [ path
+.RI [ servername ]]
+.SH DESCRIPTION
+.B tlsget
+dials
+.I host
+at
+.I port
+(default 1965), performs a TLS 1.3 client handshake in Dis, requests
+.BI gemini:// servername path
+and writes the response to standard output.
+It prints the SHA-256 fingerprint of the server's leaf certificate
+before the response.
+.PP
+.I Servername
+defaults to the host part of the address and is used both as the SNI
+name and in the request URL, so a capsule can be reached by address
+when name resolution is unavailable.
+.PP
+The handshake uses
+.IR tls (2)
+for AES-128-GCM records and ECDSA P-256 verification,
+.IR mono (2)
+for X25519, and
+.IR crypt (2)
+for SHA-256.  It accepts
+.B TLS_AES_128_GCM_SHA256
+with an X25519 key share and an ECDSA P-256 server certificate.
+.SH EXAMPLES
+.EX
+tlsget tlgs.one
+tlsget 142.132.165.255!1965 / tlgs.one
+.EE
+.SH SOURCE
+.B /appl/cmd/tlsget.b
+.SH SEE ALSO
+.IR tls (2),
+.IR mono (2),
+.IR gemserve (8)
+.SH BUGS
+There is no TLS 1.2 fallback, no Ed25519 or RSA certificate support,
+no session resumption, and no certificate pinning: the fingerprint is
+reported, not checked.  The response and the fingerprint share standard
+output.

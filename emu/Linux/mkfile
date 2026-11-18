@@ -1,5 +1,5 @@
-CONF=emu			#default configuration
-CONFLIST=emu
+CONF=emu-g	#default configuration
+CONFLIST=emu-g
 CLEANCONFLIST=
 
 SYSTARG=Linux
@@ -8,7 +8,7 @@ SYSTARG=Linux
 
 INSTALLDIR=$ROOT/$SYSTARG/$OBJTYPE/bin	#path of directory where kernel is installed
 
-X11LIBS= -lX11 -lXext	# can remove or override using env section in config files
+X11LIBS= #headless	# can remove or override using env section in config files
 
 <$ROOT/mkfiles/mkfile-$SYSTARG-$OBJTYPE	#set vars based on target system
 
@@ -25,6 +25,7 @@ OBJ=\
 	lock.$O\
 	$DEVS\
 	$PORT\
+	tls.$O\
 
 LIBNAMES=${LIBS:%=lib%.a}
 #libs=${LIBS:%=$ROOT/$OBJDIR/lib/lib%.a}
@@ -35,11 +36,34 @@ CFLAGS='-DROOT="'$ROOT'"' -DEMU -I. -I../port -I$ROOT/$SYSTARG/$OBJTYPE/include 
 SYSLIBS= $X11LIBS -lm -lpthread
 KERNDATE=`{$NDATE}
 
+# $TLS is the same source the kernel uses, but the emu is built by the
+# host cc, so no preprocessing is needed and neither is -DEMU: lib9.h
+# then supplies its own Proc typedef for runt.h.
+TLSFLAGS='-DROOT="'$ROOT'"' -I. -I$ROOT/os/pc -I$ROOT/$SYSTARG/$OBJTYPE/include \
+	-I$ROOT/include -I$ROOT/libinterp -I$ROOT/libbearssl/inc \
+	$CTHREADFLAGS $EMUOPTIONS
+
 default:V:	$O.$CONF
 
-$O.$CONF:	$OBJ $CONF.c $CONF.root.h $LIBNAMES
+$O.$CONF:	$OBJ $CONF.c $CONF.root.h $LIBNAMES bearssl
 	$CC $CFLAGS '-DKERNDATE='$KERNDATE $CONF.c
-	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS
+	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES \
+		`ls $ROOT/libbearssl/obj-emu-$OBJTYPE/*.o` $SYSLIBS
+
+bearssl:V:
+	test -f $ROOT/libbearssl/obj-emu-$OBJTYPE/settings.o || \
+		(cd $ROOT/libbearssl; ROOT=$ROOT OBJTYPE=$OBJTYPE EMU=1 sh ./build.sh)
+
+tls.$O:	$ROOT/os/pc/tls.c $ROOT/os/pc/tlsif.h $ROOT/os/pc/tlsmod.h
+	$CC $TLSFLAGS -o $target $ROOT/os/pc/tls.c
+
+$ROOT/os/pc/tlsif.h:	$ROOT/module/tls.m
+	cd $ROOT/os/pc && $ROOT/Linux/386/bin/limbo -a -I$ROOT/module \
+		$ROOT/module/tls.m > $target
+
+$ROOT/os/pc/tlsmod.h:	$ROOT/module/tls.m
+	cd $ROOT/os/pc && $ROOT/Linux/386/bin/limbo -t TLS -I$ROOT/module \
+		$ROOT/module/tls.m > $target
 
 install:V: $O.$CONF
 	cp $O.$CONF $INSTALLDIR/$CONF

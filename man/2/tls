@@ -13,6 +13,7 @@ n = tls->write(h, buf);
 tls->close(h);
 
 (cert, key, err) := tls->certgen(cn, notbefore, notafter);
+ok := tls->ecverify(pub, hash, sig);
 .EE
 .SH DESCRIPTION
 .B tls
@@ -69,11 +70,21 @@ as additional authenticated data.
 returns an ASN.1 DER ECDSA P-256/SHA-256 signature over
 .I msg
 using the same 32-byte scalar as a session.
+.B ecverify
+checks such a signature over a 32-byte hash against a 65-byte
+uncompressed P-256 point (04||X||Y), returning 1 if it is valid.
 .SH FILES
 .TF /libbearssl
 .TP
 .B /libbearssl
 vendored BearSSL sources, configuration and build script
+.PP
+The same implementation is compiled into the hosted emulator, so
+.B tls
+is available to Dis programs under
+.B emu
+as well as in the native kernel.  There it is built by the host C
+compiler; the kernel build preprocesses the sources for 8c.
 .SH SOURCE
 .B /os/pc/tls.c
 .br

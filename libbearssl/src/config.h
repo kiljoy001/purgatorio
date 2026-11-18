@@ -226,4 +226,13 @@
 #define BR_BE_UNALIGNED   0
  */
 
+/*
+ * The vendored subset does not include the x86 AES-NI / PCLMUL or SSE2
+ * source files, so the autodetection must not reference them.  This
+ * matters for the hosted emulator, which is compiled by a real GCC that
+ * advertises the instruction set.
+ */
+#define BR_AES_X86NI   0
+#define BR_SSE2        0
+
 #endif

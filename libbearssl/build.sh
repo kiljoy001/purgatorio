@@ -1,25 +1,38 @@
 #!/bin/sh
-# build.sh -- compile the BearSSL subset for the Inferno kernel.
+# build.sh -- compile the BearSSL subset for the Inferno kernel or emu.
 #
 #   ./build.sh [clean]
 #
-# BearSSL uses #if, which 8c's built-in preprocessor does not support,
-# so each source is preprocessed with the host gcc (with -undef so the
-# generic non-GCC paths are selected) and then compiled by 8c.  The
-# compat headers map stdint/stddef/string to Plan 9's u.h/kern.h.
+# For the native kernel, BearSSL's #if is a problem: 8c's built-in
+# preprocessor does not support it.  Each source is therefore
+# preprocessed with the host gcc (with -undef so the generic non-GCC
+# paths are selected) and then compiled by 8c; the compat headers map
+# stdint/stddef/string to Plan 9's u.h/kern.h.
 #
-# Output: $ROOT/Inferno/$OBJTYPE/lib/libbearssl.a
+# For the hosted emulator (EMU=1) the host cc compiles the sources
+# directly.  That build's objects are 32-bit to match the emu.
+#
+# Outputs: $ROOT/Inferno/$OBJTYPE/lib/libbearssl.a  (kernel)
+#          $ROOT/Linux/$OBJTYPE/lib/libbearssl.a    (emu)
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root=${ROOT:-$(cd "$here/.." && pwd)}
 objtype=${OBJTYPE:-386}
+emu=${EMU:-0}
 cc=${CC:-$root/Linux/386/bin/8c}
 gcc=${GCC:-gcc}
-out=$root/Inferno/$objtype/lib/libbearssl.a
-obj=$here/obj-$objtype
+if [ "$emu" = 1 ]; then
+	out=$root/Linux/$objtype/lib/libbearssl.a
+	obj=$here/obj-emu-$objtype
+else
+	out=$root/Inferno/$objtype/lib/libbearssl.a
+	obj=$here/obj-$objtype
+fi
 
 if [ "${1:-}" = clean ]; then
-	rm -rf "$obj" "$out"
+	rm -rf "$here/obj-$objtype" "$here/obj-emu-$objtype" \
+		"$root/Inferno/$objtype/lib/libbearssl.a" \
+		"$root/Linux/$objtype/lib/libbearssl.a"
 	exit 0
 fi
 
@@ -79,6 +92,8 @@ ec/ec_secp256r1.c
 ec/ecdsa_i15_bits.c
 ec/ecdsa_i15_sign_raw.c
 ec/ecdsa_i15_sign_asn1.c
+ec/ecdsa_i15_vrfy_raw.c
+ec/ecdsa_i15_vrfy_asn1.c
 rand/hmac_drbg.c
 ssl/ssl_engine.c
 ssl/ssl_hs_server.c
@@ -91,17 +106,31 @@ ssl/prf.c
 ssl/prf_sha256.c"
 
 objs=
-for s in $srcs; do
-	b=$(echo "$s" | tr / _)
-	$gcc -E -undef -Dinline= -Dmemcpy=br_memcpy \
-		-I"$here/compat" \
-		-I"$root/Inferno/$objtype/include" \
-		-I"$root/include" \
-		-I"$here/inc" -I"$here/src" \
-		-o "$obj/$b.i" "$here/src/$s"
-	$cc -o "$obj/$b.8" "$obj/$b.i"
-	objs="$objs $obj/$b.8"
-done
+if [ "$emu" = 1 ]; then
+	case "$objtype" in
+	386) arch=-m32 ;;
+	*) arch= ;;
+	esac
+	emucflags=${EMUCFLAGS:-$arch -O2 -fno-strict-aliasing}
+	for s in $srcs; do
+		b=$(echo "$s" | tr / _)
+		$gcc $emucflags -I"$here/inc" -I"$here/src" \
+			-c -o "$obj/$b.o" "$here/src/$s"
+		objs="$objs $obj/$b.o"
+	done
+else
+	for s in $srcs; do
+		b=$(echo "$s" | tr / _)
+		$gcc -E -undef -Dinline= -Dmemcpy=br_memcpy \
+			-I"$here/compat" \
+			-I"$root/Inferno/$objtype/include" \
+			-I"$root/include" \
+			-I"$here/inc" -I"$here/src" \
+			-o "$obj/$b.i" "$here/src/$s"
+		$cc -o "$obj/$b.8" "$obj/$b.i"
+		objs="$objs $obj/$b.8"
+	done
+fi
 
 rm -f "$out"
 ar rcs "$out" $objs

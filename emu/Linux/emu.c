@@ -72,6 +72,8 @@ extern void mathmodinit(void);
 extern void srvmodinit(void);
 extern void keyringmodinit(void);
 extern void cryptmodinit(void);
+extern void monomodinit(void);
+extern void tlsmodinit(void);
 extern void ipintsmodinit(void);
 extern void loadermodinit(void);
 extern void freetypemodinit(void);
@@ -83,6 +85,8 @@ void modinit(void){
 	srvmodinit();
 	keyringmodinit();
 	cryptmodinit();
+	monomodinit();
+	tlsmodinit();
 	ipintsmodinit();
 	loadermodinit();
 	freetypemodinit();
