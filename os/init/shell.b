@@ -15,6 +15,11 @@ Sh: module
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
+Timed: module
+{
+	init:	fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
 Mount: module
 {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -68,6 +73,7 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 	loopback();
 	netstart();
 	setclock();
+	timedstart(drawcontext);
 	firstboot();
 	svcstart();
 	gemstart(drawcontext);
@@ -227,6 +233,18 @@ svcstart()
 		return;
 	}
 	spawn svcd->init(nil, "svcd" :: nil);
+}
+
+# Wall-clock service: boot source, SNTP when configured, and the
+# /n/time/{now,status,ctl} namespace.
+timedstart(ctxt: ref Draw->Context)
+{
+	t := load Timed "/dis/timed.dis";
+	if(t == nil){
+		sys->print("init: no /dis/timed.dis: %r\n");
+		return;
+	}
+	spawn t->init(ctxt, "timed" :: nil);
 }
 
 # Start the Gemini server if the image carries it.  It reads the

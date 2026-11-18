@@ -254,17 +254,13 @@ readkbd(void)
 long
 osmillisec(void)
 {
-	static long sec0 = 0, usec0;
-	struct timeval t;
+	struct timespec t;
 
-	if(gettimeofday(&t,(struct timezone*)0)<0)
+	/* Monotonic, like the kernel's tick counter: never affected by
+	 * a wall-clock step, and independent of when it is first called. */
+	if(clock_gettime(CLOCK_MONOTONIC, &t) < 0)
 		return 0;
-
-	if(sec0 == 0) {
-		sec0 = t.tv_sec;
-		usec0 = t.tv_usec;
-	}
-	return (t.tv_sec-sec0)*1000+(t.tv_usec-usec0+500)/1000;
+	return (long)(t.tv_sec*1000 + t.tv_nsec/1000000);
 }
 
 /*

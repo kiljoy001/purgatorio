@@ -1,0 +1,112 @@
+.TH TIMED 8
+.SH NAME
+timed \- wall clock, SNTP discipline and time status
+.SH SYNOPSIS
+.B timed
+.RB [ -d
+.IR dir ]
+.RB [ -s
+.IR server ]
+.RB [ -i
+.IR seconds ]
+.SH DESCRIPTION
+.B timed
+owns the wall clock.  It sets a coarse time at boot and then, when
+servers are configured, disciplines it with SNTP.
+.PP
+There are two clocks.  The wall clock is
+.BR /dev/time :
+microseconds since the epoch, writable by the host owner, and shared by
+every namespace.  The monotonic clock is
+.BR millisec (2)
+in the kernel (milliseconds since boot) and
+.BR clock_gettime (2)
+under the emulator; it is never set, and timeouts should use it.
+.PP
+At start,
+.B timed
+reads
+.BR /dev/time .
+If it is before 2020 it tries
+.BR /n/host/time ,
+the epoch the 9vm host writes into the 9P tree (the guest has no RTC).
+Otherwise the clock is accepted as a coarse host source.
+.PP
+Servers come from
+.B -s
+options or from
+.BR /lib/ndb/time ,
+one
+.B sntp=\fIhost\fP
+line per server.  After a successful exchange it computes
+offset and round-trip delay from the four timestamps and steps
+.B /dev/time
+when the offset exceeds one second, or when the clock has not yet been
+verified by SNTP.  Smaller offsets are reported but not corrected.
+.PP
+The service republishes
+.BI dir /status
+after each sync and every interval:
+.PP
+.RS
+.EX
+source=host|sntp
+synced=1
+verified=0|1
+server=S
+offset_us=N
+delay_us=N
+stratum=N
+last=unixseconds
+now=microseconds
+mono=milliseconds
+.EE
+.RE
+.PP
+.B now
+and
+.B mono
+are written when the file is published, not live; use
+.B /dev/time
+and
+.B millisec
+for the current values.
+.SH OPTIONS
+.TF "-i seconds"
+.TP
+.BI -d " dir"
+Publish directory (default
+.BR /n/time ).
+.TP
+.BI -s " server"
+Add an SNTP server; may be repeated.
+.TP
+.BI -i " seconds"
+Seconds between syncs (default 900).
+.SH FILES
+.TF /lib/ndb/time
+.TP
+.B /dev/time
+wall clock, microseconds since the epoch
+.TP
+.B /n/host/time
+host epoch seconds on 9vm
+.TP
+.B /lib/ndb/time
+.B sntp=
+lines
+.TP
+.B /n/time/status
+last published state
+.SH SOURCE
+.B /appl/cmd/timed.b
+.SH SEE ALSO
+.IR millisec (2),
+.IR sys (2)
+.SH BUGS
+Offsets are stepped, not slewed, so a later correction can move the
+wall clock backwards.  Leap seconds, NTP authentication and server
+selection by stratum are not implemented; SNTP replies are accepted
+from the first configured server that answers.  A reply is checked for
+the client's origin timestamp but the server is not authenticated,
+so this is only as trustworthy as the network path.

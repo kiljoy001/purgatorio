@@ -350,6 +350,7 @@ root
 	/dis/gettar.dis
 	/dis/gif2bit.dis
 	/dis/gemserve.dis
+	/dis/timed.dis
 	/dis/grep.dis
 	/dis/grid/blurdemo.dis
 	/dis/grid/cpupool.dis
