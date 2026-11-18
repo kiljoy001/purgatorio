@@ -983,8 +983,31 @@ parent(s: string): string
 	return "";
 }
 
+# Root hints from the database (/lib/ndb/dns or a -f file), so the
+# shipped list can be overridden without rebuilding.  The built-in
+# list below is only the fallback.
+dbroots(): list of ref NS
+{
+	hosts := dblook("dom", "", "ns");
+	sl: list of ref NS;
+	for(; hosts != nil; hosts = tl hosts){
+		nm := hd hosts;
+		al: list of ref RR;
+		for(addrs := dblook("dom", nm, "ip"); addrs != nil; addrs = tl addrs){
+			a := parseip(hd addrs);
+			if(a != nil)
+				al = ref RR.A(nm, Ta, Cin, 1<<31, 0, a) :: al;
+		}
+		if(al != nil)
+			sl = ref NS(nm, al, 0, 1<<31) :: sl;
+	}
+	return sl;
+}
+
 rootservers(): list of ref NS
 {
+	if((s := dbroots()) != nil)
+		return s;
 	slist: list of ref NS;
 	slist = ref NS("m.root-servers.net", ref RR.A("m.root-servers.net", Ta, Cin, 1<<31, 0,
 		array[] of {byte 202, byte 12, byte 27, byte 33})::nil, 0, 1<<31) :: slist;

@@ -4,6 +4,7 @@ include "sys.m";
 include "draw.m";
 
 sys: Sys;
+gateway: string;		# default route from net.conf, if any
 
 InitShell: module
 {
@@ -285,7 +286,7 @@ hasedns(path: string): int
 
 dnsstart(ctxt: ref Draw->Context)
 {
-	if(dnsconfigured()){
+	if(dnsconfigured() || gateway != nil){
 		d := load Dns "/dis/ndb/dns.dis";
 		if(d == nil)
 			sys->print("init: no /dis/ndb/dns.dis: %r\n");
@@ -293,7 +294,10 @@ dnsstart(ctxt: ref Draw->Context)
 			# -h: no host resolver; -r: forward to dns=;
 			# -d: ordinary UDP (no hosted header layout).
 			spawn d->init(ctxt, "dns" :: "-h" :: "-r" :: "-d" :: nil);
-			sys->print("init: dns forwarding\n");
+			if(dnsconfigured())
+				sys->print("init: dns forwarding\n");
+			else
+				sys->print("init: dns recursing\n");
 		}
 	}
 	c := load Cs "/dis/ndb/cs.dis";
@@ -365,6 +369,8 @@ netstart()
 			cmd = val;
 		"dns" =>
 			dns = val;
+		"gateway" =>
+			gateway = val;
 		}
 	}
 	if(ip == nil || mask == nil)
@@ -380,6 +386,18 @@ netstart()
 		sys->print("net: add %s: %r\n", ip);
 	else
 		sys->print("net: %s %s\n", ip, mask);
+	if(gateway != nil){
+		rfd := sys->open("/net/iproute", Sys->OWRITE);
+		if(rfd == nil)
+			sys->print("net: open /net/iproute: %r\n");
+		else{
+			if(sys->fprint(rfd, "add 0.0.0.0 0.0.0.0 %s\n", gateway) < 0)
+				sys->print("net: gateway %s: %r\n", gateway);
+			else
+				sys->print("net: gateway %s\n", gateway);
+			rfd = nil;
+		}
+	}
 	if(dns != nil){
 		nfd := sys->open("/net/ndb", Sys->OWRITE);
 		if(nfd == nil)
