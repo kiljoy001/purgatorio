@@ -11,6 +11,8 @@ implement Monoca;
 #	monoca status
 #	monoca [-k keyfile] daemon [-i seconds]
 #	monoca stop
+#	monoca serve [addr]		export the CA state over 9P
+#	monoca sync addr		fetch and verify it from a peer
 #
 # The authorised set is /keydb/monoca/leaves, one "name pkhex exp" per
 # line.  Each change sorts the leaves by hash, computes the root and
@@ -46,10 +48,32 @@ Monoca: module
 	init:	fn(nil: ref Draw->Context, argv: list of string);
 };
 
+Mount: module
+{
+	init:	fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
+Listen: module
+{
+	init:	fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
+# The epoch record, parsed without returning several arrays.
+Epoch: adt
+{
+	n:	int;
+	t:	int;
+	w:	int;
+	root:	array of byte;
+	sig:	array of byte;
+};
+
 DIR:	con "/keydb/monoca";
 SIGNER:	con "/keydb/mono-signer";
 LOCK:	con "/keydb/monoca/lock";
 WINDOW:	con 3600;
+MP:	con "/n/monoca";	# mount point for monoca sync
+SERVEADDR:	con "tcp!*!2020";
 
 keyfile: string;
 
@@ -103,6 +127,10 @@ init(nil: ref Draw->Context, args: list of string)
 		daemon(rest);
 	"stop" =>
 		stop();
+	"serve" =>
+		serve(rest);
+	"sync" =>
+		sync(rest);
 	* =>
 		usage();
 	}
@@ -111,7 +139,7 @@ init(nil: ref Draw->Context, args: list of string)
 usage()
 {
 	sys->fprint(sys->fildes(2),
-		"usage: monoca [-k keyfile] enroll name [pkhex [exp]] | revoke name | publish | epoch | root | status | daemon [-i secs] | stop\n");
+		"usage: monoca [-k keyfile] enroll name [pkhex [exp]] | revoke name | publish | epoch | root | status | daemon [-i secs] | stop\n       monoca serve [addr] | monoca sync addr\n");
 }
 
 # ---- commands --------------------------------------------------------
@@ -264,7 +292,8 @@ daemon(args: list of string): int
 		if(d != nil){
 			if(staleepoch())
 				renew = 1;
-			else if(last != nil && mono->equal(d, last) != 1)
+			else if(last != nil && mono->equal(d, last) != 1 &&
+				!epochmatches())
 				renew = 1;
 		}
 		if(renew){
@@ -457,6 +486,211 @@ getsk(): array of byte
 		return nil;
 	}
 	return sk;
+}
+
+# ---- distribution ----------------------------------------------------
+
+# serve exports the CA directory over plain 9P.  The data does not need
+# confidentiality: every epoch is signed and every verifier checks the
+# signature and the root before trusting it.
+serve(args: list of string): int
+{
+	addr := SERVEADDR;
+	dir := DIR;
+	if(args != nil){
+		addr = hd args;
+		if(tl args != nil)
+			dir = hd tl args;
+	}
+	l := load Listen "/dis/listen.dis";
+	if(l == nil){
+		sys->fprint(sys->fildes(2), "monoca: cannot load /dis/listen.dis\n");
+		return -1;
+	}
+	sys->print("monoca: serving %s on %s\n", dir, addr);
+	# -A: no auth, the records are signed; -s: stay in the foreground
+	# so svcd supervises this process.
+	l->init(nil, "listen" :: "-A" :: "-s" :: addr :: "/dis/export" :: dir :: nil);
+	return 0;
+}
+
+# sync mounts a peer's export, verifies the epoch against the trusted
+# public keys and the root recomputed from the leaves, and installs it
+# only if it is newer.  A failed check leaves the current state alone.
+sync(args: list of string): int
+{
+	if(args == nil){
+		usage();
+		return -1;
+	}
+	addr := hd args;
+	if(!prefix(addr, "tcp!"))
+		addr = "tcp!" + addr;
+	mkdir("/n");
+	mkdir(MP);
+	sys->unmount(nil, MP);
+	m := load Mount "/dis/mount.dis";
+	if(m == nil){
+		sys->fprint(sys->fildes(2), "monoca: cannot load /dis/mount.dis\n");
+		return -1;
+	}
+	{
+		m->init(nil, "mount" :: "-A" :: addr :: MP :: nil);
+	} exception e {
+	"*" =>
+		sys->fprint(sys->fildes(2), "monoca: mount %s: %s\n", addr, e);
+		return -1;
+	}
+	etext := readfile(MP + "/epoch");
+	ltext := readfile(MP + "/leaves");
+	rtext := readfile(MP + "/root");
+	sys->unmount(nil, MP);
+	if(etext == "" || ltext == ""){
+		sys->fprint(sys->fildes(2), "monoca: %s did not export an epoch and leaves\n", addr);
+		return -1;
+	}
+
+	ep := ref Epoch;
+	ep.root = nil;
+	ep.sig = nil;
+	if(!parseepoch(etext, ep)){
+		sys->fprint(sys->fildes(2), "monoca: %s: bad epoch record\n", addr);
+		return -1;
+	}
+	(ps, _) := sgn->pubs(SIGNER);
+	if(ps == nil){
+		sys->fprint(sys->fildes(2), "monoca: no trusted public key in %s.pub\n", SIGNER);
+		return -1;
+	}
+	if(!certok(ep.sig, ps, epochmsg(ep.n, ep.t, ep.w, ep.root))){
+		sys->fprint(sys->fildes(2), "monoca: %s: epoch signature does not verify\n", addr);
+		return -1;
+	}
+	now := daytime->now();
+	if(now > ep.t + ep.w){
+		sys->fprint(sys->fildes(2), "monoca: %s: epoch is stale\n", addr);
+		return -1;
+	}
+	r := leavesroot(ltext);
+	if(r == nil || mono->equal(r, ep.root) != 1){
+		sys->fprint(sys->fildes(2), "monoca: %s: root does not match the leaves\n", addr);
+		return -1;
+	}
+	if(rtext != ""){
+		rr := hex2bytes(trimnl(rtext));
+		if(rr != nil && mono->equal(rr, r) != 1){
+			sys->fprint(sys->fildes(2), "monoca: %s: root file disagrees\n", addr);
+			return -1;
+		}
+	}
+
+	fd := lockwait();
+	if(fd == nil){
+		sys->fprint(sys->fildes(2), "monoca: cannot lock %s\n", LOCK);
+		return -1;
+	}
+	cur := epochno();
+	if(ep.n <= cur){
+		unlock(fd);
+		sys->print("monoca: already at epoch %d\n", cur);
+		return 0;
+	}
+	mkdir(DIR + "/roots");
+	if(cur > 0){
+		orec := readfile(DIR + "/epoch");
+		if(orec != "")
+			writefile(DIR + "/roots/" + string cur, orec);
+	}
+	writefile(DIR + "/leaves", ltext);
+	writefile(DIR + "/epoch", etext);
+	writefile(DIR + "/root", bytes2hex(r) + "\n");
+	unlock(fd);
+	sys->print("monoca: epoch %d root %s from %s\n", ep.n, bytes2hex(r), addr);
+	return 0;
+}
+
+# epochmatches is true when the current leaves already hash to the root
+# in the signed epoch, so a digest change (a sync, or an edited line
+# that changes nothing) does not need a new epoch.
+epochmatches(): int
+{
+	ep := ref Epoch;
+	ep.root = nil;
+	ep.sig = nil;
+	if(!parseepoch(readfile(DIR + "/epoch"), ep) || ep.root == nil)
+		return 0;
+	r := leavesroot(readfile(DIR + "/leaves"));
+	return r != nil && mono->equal(r, ep.root) == 1;
+}
+
+parseepoch(s: string, ep: ref Epoch): int
+{
+	ep.n = 0;
+	ep.t = 0;
+	ep.w = 0;
+	ep.root = nil;
+	ep.sig = nil;
+	for(; len s > 0;){
+		(rest, line) := nextline(s);
+		s = rest;
+		(f, v) := splitfield(line);
+		case f {
+		"epoch" => ep.n = int v;
+		"time" => ep.t = int v;
+		"window" => ep.w = int v;
+		"root" => ep.root = hex2bytes(v);
+		"sig" => ep.sig = hex2bytes(v);
+		}
+	}
+	return ep.n > 0 && ep.root != nil && len ep.root == 32 &&
+		ep.sig != nil && len ep.sig == 64;
+}
+
+# leavesroot parses name/pk/exp lines and returns the Merkle root, or
+# nil when a line is malformed.
+leavesroot(s: string): array of byte
+{
+	l: list of array of byte;
+	for(; len s > 0;){
+		(rest, line) := nextline(s);
+		s = rest;
+		if(line == "")
+			continue;
+		(fa, nf) := split(line, 3);
+		if(nf < 3)
+			return nil;
+		h := merkle->leaf(fa[0], hex2bytes(fa[1]), int fa[2]);
+		if(h == nil)
+			return nil;
+		l = h :: l;
+	}
+	return merkle->root(sorted(l));
+}
+
+certok(sig: array of byte, pubs: list of array of byte, msg: array of byte): int
+{
+	for(; pubs != nil; pubs = tl pubs)
+		if(mono->edcheck(sig, hd pubs, msg) == 1)
+			return 1;
+	return 0;
+}
+
+epochmsg(n, t, w: int, root: array of byte): array of byte
+{
+	b := array[8 + 8 + 8 + 32] of byte;
+	put8(b, 0, n);
+	put8(b, 8, t);
+	put8(b, 16, w);
+	for(i := 0; i < 32; i++)
+		b[24+i] = root[i];
+	return cat2(array of byte "epoch1", b);
+}
+
+trimnl(s: string): string
+{
+	while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == ' ' || s[len s-1] == '\r'))
+		s = s[0 : len s-1];
+	return s;
 }
 
 # ---- writer lock -----------------------------------------------------

@@ -49,6 +49,15 @@ monoca \- publish the authorised identity set as a signed Merkle root
 .br
 .B monoca
 .B stop
+.br
+.B monoca
+.B serve
+.RI [ addr
+.RI [ dir ]]
+.br
+.B monoca
+.B sync
+.I addr
 .SH DESCRIPTION
 .B monoca
 maintains the set of identities a fleet trusts.  Each identity is a
@@ -132,6 +141,44 @@ refuses to start when another daemon is alive, and sleeps
 .B stop
 kills it through
 .BR /prog/\fIpid\fP/ctl .
+.SS Distribution
+.B serve
+exports the CA directory with
+.IR listen (1)
+and
+.IR export (1)
+on
+.I addr
+(default
+.BR tcp!*!2020 )
+from
+.I dir
+(default
+.BR /keydb/monoca ).
+The export is plain 9P: the epoch is signed and the root covers the
+leaves, so the transport does not have to be trusted, only available.
+.B sync
+mounts a peer's export at
+.BR /n/monoca ,
+checks the epoch signature against every key in
+.BR /keydb/mono-signer.pub ,
+recomputes the Merkle root from the leaves, and refuses a stale epoch
+or one older than the local epoch.  Only then does it install
+.BR leaves ,
+.B epoch
+and
+.B root
+under the writer lock; a failed check leaves the current state alone.
+It cannot install an epoch signed by a key this host does not trust.
+.IP
+.EX
+; monoca serve tcp!*!2020                 # on the CA
+; monoca sync tcp!ca.example!2020         # on a peer
+.EE
+.IP
+The daemon notices that the installed leaves already match the signed
+root and does not republish them, so a sync does not cause an epoch
+churn.
 .PP
 Enroll, revoke, publish and the daemon all take
 .BR /keydb/monoca/lock
@@ -196,6 +243,11 @@ writer lock
 .B /keydb/monoca/daemon
 pid of the running daemon
 .TP
+.B /n/monoca
+mount point used while
+.B sync
+reads a peer
+.TP
 .B /keydb/mono-signer
 EdDSA secret key, encrypted when a key file is available
 .TP
@@ -210,15 +262,18 @@ trusted public keys
 .IR monoauth (8),
 .IR certify (8)
 .SH BUGS
-There is no 9P server yet: the records are files under
-.BR /keydb/monoca ,
-not a served file tree.  Distribution of
-.B leaves
-and
-.B epoch
-to the peers is still a copy; only
-.B mono-signer.pub
-is read from a single place per host.
+Distribution is pull-only and manual: a peer runs
+.B sync
+when told, and the
+.B roots
+directory is not mirrored, so
+.I mcheck
+cannot verify an epoch the peer did not see before.  The export has no
+access control; anyone who can reach the port can read the public
+leaves and the signed epoch.  Serving a snapshot with
+.B serve
+.I dir
+is intended for testing and for a read-only replica.
 .PP
 An epoch is a full tree rebuild, so enrolling many identities is linear
 in the set size; that is adequate for a fleet and is the first thing to
