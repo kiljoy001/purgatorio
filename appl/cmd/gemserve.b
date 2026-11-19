@@ -133,6 +133,13 @@ init(nil: ref Draw->Context, args: list of string)
 	pcnt = array[MAXPEER] of int;
 	plast = array[MAXPEER] of int;
 	plog = array[MAXPEER] of int;
+	# A fresh Limbo array is not guaranteed to be zeroed.
+	for(i = 0; i < MAXPEER; i++){
+		paddr[i] = "";
+		pcnt[i] = 0;
+		plast[i] = 0;
+		plog[i] = 0;
+	}
 
 	err := loadcert();
 	if(err != nil){
