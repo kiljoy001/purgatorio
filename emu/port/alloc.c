@@ -2,6 +2,9 @@
 #include "fns.h"
 #include "interp.h"
 #include "error.h"
+#ifdef __linux__
+#include <sys/mman.h>
+#endif
 
 enum
 {
@@ -373,8 +376,23 @@ dopoolalloc(Pool *p, ulong asize, ulong pc)
 	}
 
 	p->nbrk++;
+#ifdef __linux__
+	/*
+	 * sbrk is unreliable in some 32-bit environments (notably a
+	 * musl build under qemu-user, where it returns -1).  Anonymous
+	 * mmap gives the pool the same raw memory and lets it chain
+	 * the arenas.
+	 */
+	t = mmap(nil, alloc, PROT_READ|PROT_WRITE,
+		MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+	if(t == MAP_FAILED)
+		t = nil;
+#else
 	t = (Bhdr *)sbrk(alloc);
-	if(t == (void*)-1) {
+	if(t == (void*)-1)
+		t = nil;
+#endif
+	if(t == nil) {
 		p->nbrk--;
 		unlock(&p->l);
 		return nil;
