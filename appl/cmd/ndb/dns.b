@@ -429,13 +429,18 @@ dblookns(dom: string): list of ref RR
 		if(debug)
 			sys->print("dns db: dom=%s ns=%s\n", dom, s);
 		ipl: list of ref RR = nil;
-		addrs := dblook("dom", s, "ip");
-		for(; addrs != nil; addrs = tl addrs){
-			a := parseip(hd addrs);
-			if(a != nil){
-				ipl = ref RR.A(s, Ta, Cin, now+60, 0, a) :: ipl;
+		for(a6 := dblook("dom", s, "ip6"); a6 != nil; a6 = tl a6){
+			if((r := mkaddr(s, hd a6, now+60)) != nil){
+				ipl = r :: ipl;
 				if(debug)
-					sys->print("dom=%s ip=%s\n", s, hd addrs);
+					sys->print("dom=%s ip6=%s\n", s, hd a6);
+			}
+		}
+		for(a4 := dblook("dom", s, "ip"); a4 != nil; a4 = tl a4){
+			if((r := mkaddr(s, hd a4, now+60)) != nil){
+				ipl = r :: ipl;
+				if(debug)
+					sys->print("dom=%s ip=%s\n", s, hd a4);
 			}
 		}
 		if(ipl != nil){
@@ -460,16 +465,19 @@ defaultresolvers(): list of ref NS
 	al: list of ref RR;
 	for(; resolvers != nil; resolvers = tl resolvers){
 		nm := hd resolvers;
-		a := parseip(nm);
-		if(a == nil){
+		if((r := mkaddr("defaultns", nm, now+60)) != nil)
+			al = r :: al;
+		else{
 			# try looking it up as a domain name with an ip address
-			for(addrs := dblook("dom", nm, "ip"); addrs != nil; addrs = tl addrs){
-				a = parseip(hd addrs);
-				if(a != nil)
-					al = ref RR.A("defaultns", Ta, Cin, now+60, 0, a) :: al;
+			for(a6 := dblook("dom", nm, "ip6"); a6 != nil; a6 = tl a6){
+				if((r = mkaddr("defaultns", hd a6, now+60)) != nil)
+					al = r :: al;
 			}
-		}else
-			al = ref RR.A("defaultns", Ta, Cin, now+60, 0, a) :: al;
+			for(a4 := dblook("dom", nm, "ip"); a4 != nil; a4 = tl a4){
+				if((r = mkaddr("defaultns", hd a6, now+60)) != nil)
+					al = r :: al;
+			}
+		}
 	}
 	if(al == nil){
 		if(debug)
@@ -557,6 +565,7 @@ Tmb: con 7;
 Tptr: con 12;
 Thinfo: con 13;
 Tmx: con 15;
+Taaaa: con 28;
 Tall: con 255;
 
 #
@@ -885,6 +894,15 @@ RR.text(rr: self ref RR): string
 			a := ar.rdata;
 			s += sys->sprint("\t%d.%d.%d.%d", int a[0], int a[1], int a[2], int a[3]);
 		}
+	Other =>
+		if(rr.rtype == Taaaa && len ar.rdata == 16){
+			ip := IPaddr.newv6(ar.rdata);
+			s += "\t" + ip.text();
+		}else{
+			a := ar.rdata;
+			for(i := 0; i < len a; i++)
+				s += sys->sprint("%.2x", int a[i]);
+		}
 	Error =>
 		s += sys->sprint("\t!%s", ar.reason);
 	}
@@ -983,6 +1001,18 @@ parent(s: string): string
 	return "";
 }
 
+# mkaddr turns an address string into an A or AAAA resource record.
+# A string with a colon is IPv6; anything else parseable is IPv4.
+mkaddr(nm, s: string, ttl: int): ref RR
+{
+	(ok, a) := IPaddr.parse(s);
+	if(ok < 0)
+		return nil;
+	if(a.isv4())
+		return ref RR.A(nm, Ta, Cin, ttl, 0, a.v4());
+	return ref RR.Other(nm, Taaaa, Cin, ttl, 0, a.v6());
+}
+
 # Root hints from the database (/lib/ndb/dns or a -f file), so the
 # shipped list can be overridden without rebuilding.  The built-in
 # list below is only the fallback.
@@ -993,10 +1023,15 @@ dbroots(): list of ref NS
 	for(; hosts != nil; hosts = tl hosts){
 		nm := hd hosts;
 		al: list of ref RR;
-		for(addrs := dblook("dom", nm, "ip"); addrs != nil; addrs = tl addrs){
-			a := parseip(hd addrs);
-			if(a != nil)
-				al = ref RR.A(nm, Ta, Cin, 1<<31, 0, a) :: al;
+		# IPv6 first, so the IPv4 records end up at the head of the
+		# list and are tried first on a mixed network.
+		for(a6 := dblook("dom", nm, "ip6"); a6 != nil; a6 = tl a6){
+			if((r := mkaddr(nm, hd a6, 1<<31)) != nil)
+				al = r :: al;
+		}
+		for(a4 := dblook("dom", nm, "ip"); a4 != nil; a4 = tl a4){
+			if((r := mkaddr(nm, hd a6, 1<<31)) != nil)
+				al = r :: al;
 		}
 		if(al != nil)
 			sl = ref NS(nm, al, 0, 1<<31) :: sl;
@@ -1088,6 +1123,8 @@ Step1:
 				pick ns := hd nsl {
 				Host =>
 					(addrs, err2) := lookcache(ns.host, Ta, Cin);
+					if(addrs == nil)
+						(addrs, err2) = lookcache(ns.host, Taaaa, Cin);
 					if(addrs != nil)
 						known = ref NS(ns.host, addrs, 0, 1<<31) :: known;
 					else if(err2 == nil)
@@ -1133,6 +1170,8 @@ Step1:
 					sys->print("recursive[%d] query for %s address\n", depth+1, ns.name);
 				(ns.addr, nil) = fulldnsquery(ns.name, Ta, depth+1);
 				if(ns.addr == nil)
+					(ns.addr, nil) = fulldnsquery(ns.name, Taaaa, depth+1);
+				if(ns.addr == nil)
 					continue;
 			}
 			if(fd == nil && !usedial){
@@ -1140,9 +1179,17 @@ Step1:
 				if(fd == nil)
 					return (nil, sys->sprint("%r"));
 			}
-			(dm, err2) := udpquery(fd, id, query, ns.name, hd ns.addr);
-			if(dm == nil){
+			# Try every address of this server: a v4 address may
+			# fail on a v6-only host, and vice versa.
+			dm: ref DNSmsg;
+			err2: string;
+			for(al := ns.addr; al != nil; al = tl al){
+				(dm, err2) = udpquery(fd, id, query, ns.name, hd al);
+				if(dm != nil)
+					break;
 				sys->fprint(stderr, "dns: %s: %s\n", ns.name, err2);
+			}
+			if(dm == nil){
 				# TO DO: remove from slist
 				continue;
 			}
@@ -1695,6 +1742,7 @@ rrtype(s: string): int
 {
 	case s {
 	"ip" => return Ta;
+	"ip6" or "ipv6" => return Taaaa;
 	"ns" => return Tns;
 	"cname" => return Tcname;
 	"soa" => return Tsoa;
@@ -1710,6 +1758,7 @@ rrtypename(t: int): string
 {
 	case t {
 	Ta =>	return "ip";
+	Taaaa =>	return "ip6";
 	Tns =>	return "ns";
 	Tcname =>	return "cname";
 	Tsoa =>	return "soa";
@@ -1752,7 +1801,9 @@ udpquery(fd: ref Sys->FD, id: int, query: array of byte, sname: string, addr: re
 {
 	# TO DO: check address and ports?
 
-	if(usedial)
+	# The hosted UDP header path is IPv4 only; a v6 server always
+	# goes through a connected UDP socket.
+	if(usedial || addr.rtype == Taaaa)
 		return dialquery(query, sname, addr);
 
 	if(debug)
@@ -1822,16 +1873,19 @@ udpquery(fd: ref Sys->FD, id: int, query: array of byte, sname: string, addr: re
 # emulator's header layout.
 dialquery(query: array of byte, sname: string, addr: ref RR): (ref DNSmsg, string)
 {
-	ipa: array of byte;
+	host: string;
 	pick ar := addr {
 	A =>
-		ipa = ar.rdata[0:4];
-	* =>
-		return (nil, "not an A resource");
+		ipa := ar.rdata;
+		host = sys->sprint("%d.%d.%d.%d", int ipa[0], int ipa[1],
+			int ipa[2], int ipa[3]);
+	Other =>
+		if(addr.rtype != Taaaa || len ar.rdata != 16)
+			return (nil, "not an address resource");
+		host = IPaddr.newv6(ar.rdata).text();
 	}
 	port := (int query[Udprport]<<8) | int query[Udprport+1];
-	raddr := sys->sprint("udp!%d.%d.%d.%d!%d", int ipa[0], int ipa[1],
-		int ipa[2], int ipa[3], port);
+	raddr := "udp!" + host + "!" + string port;
 	conn := dial->dial(raddr, nil);
 	if(conn == nil)
 		return (nil, sys->sprint("%s: %r", raddr));
@@ -1919,15 +1973,18 @@ udpport(): ref Sys->FD
 #
 tcpquery(query: array of byte, addr: ref RR): (ref DNSmsg, string)
 {
-	ipa: array of byte;
+	host: string;
 	pick ar := addr {
 	A =>
-		ipa = ar.rdata[0:4];
-	* =>
-		return (nil, "not an A resource");
+		ipa := ar.rdata;
+		host = sys->sprint("%d.%d.%d.%d", int ipa[0], int ipa[1],
+			int ipa[2], int ipa[3]);
+	Other =>
+		if(addr.rtype != Taaaa || len ar.rdata != 16)
+			return (nil, "not an address resource");
+		host = IPaddr.newv6(ar.rdata).text();
 	}
-	raddr := sys->sprint("tcp!%d.%d.%d.%d!%d", int ipa[0], int ipa[1],
-		int ipa[2], int ipa[3], DNSport);
+	raddr := "tcp!" + host + "!" + string DNSport;
 	conn := dial->dial(raddr, nil);
 	if(conn == nil)
 		return (nil, sys->sprint("can't dial %s: %r", raddr));

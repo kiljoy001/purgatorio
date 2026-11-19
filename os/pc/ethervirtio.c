@@ -462,6 +462,8 @@ shutdown(Ether *edev)
 	pciclrbme(c->pcidev);
 }
 
+static void virtiomulticast(void*, uchar*, int);
+
 static int
 reset(Ether *edev)
 {
@@ -593,10 +595,25 @@ reset(Ether *edev)
 	edev->interrupt = interrupt;
 	edev->ifstat = ifstat;
 	edev->shutdown = shutdown;
+	edev->multicast = virtiomulticast;
 
 	pcisetbme(p);
 
 	return 0;
+}
+
+/*
+ *  Virtio-net has no multicast filter here.  The join is a no-op: the
+ *  host bridge decides what multicast reaches the tap, outgoing NDP
+ *  needs no setup, and incoming multicast (router advertisements) is
+ *  not filtered.  Reporting success lets ipifc add a v6 address.
+ */
+static void
+virtiomulticast(void *arg, uchar *addr, int on)
+{
+	USED(arg);
+	USED(addr);
+	USED(on);
 }
 
 void

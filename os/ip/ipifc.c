@@ -1205,6 +1205,11 @@ v6addrtype(uchar *addr)
 		return multicastv6;
 	if(issitelocal(addr))
 		return sitelocalv6;
+	/* Unique local addresses (fc00::/7) are the modern site-local
+	 * space; without this they are unknown and cannot be selected as
+	 * a source address. */
+	if((addr[0] & 0xfe) == 0xfc)
+		return sitelocalv6;
 	return unknownv6;
 }
 

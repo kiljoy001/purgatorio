@@ -62,6 +62,25 @@ Queries are sent over UDP.  If a reply has the truncated bit set,
 retries the same server over TCP, so an answer that does not fit in a
 UDP datagram is still returned in full.
 .PP
+The
+.B ip6
+attribute asks for AAAA records; it returns addresses in the usual
+colon form and is accepted by
+.IR dnsquery (8).
+Name servers may be IPv6, from either
+.B dns=
+or the root hints: an ndb entry may carry both
+.B ip=
+and
+.B ip6=
+lines.  When a server has several addresses, they are tried in turn,
+so a host with only one family still reaches it.  The root hints in
+.B /lib/ndb/dns
+list the IPv4 address first and the IPv6 address second.  IPv6 needs an
+address on the interface (for example
+.BR "echo add fd00::2 /64 > /net/ipifc/1/ctl" )
+before a v6 server can be reached.
+.PP
 .I Dnsquery
 queries the given
 .I server
