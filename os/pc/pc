@@ -80,6 +80,7 @@ mod
 	keyring
 	crypt
 	mono
+	tls
 	math
 
 init
@@ -133,6 +134,7 @@ root
 	/nvfs	/
 	/prog	/
 	/osinit.dis
+	/lib/svcd.conf
 	/lib/wmsetup
 	/lib/cpusession.sh
 	/lib/ndb/common

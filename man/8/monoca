@@ -140,9 +140,14 @@ with
 so there is one writer at a time; a lock left by a dead process is
 removed by checking
 .BR /prog/\fIpid\fP .
-The kernel's init starts the daemon after
+.IR Svcd (8)
+runs it as the
+.B monoca
+service.  The daemon waits for
+.B /keydb/mono-signer
+to become readable, so it can start before
 .IR certify (8)
-firstboot has made a signer, when the image has one.
+has provisioned the host.
 .SS Signer
 The epoch is signed with
 .BR /keydb/mono-signer .

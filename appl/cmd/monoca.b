@@ -233,9 +233,23 @@ daemon(args: list of string): int
 		sys->fprint(sys->fildes(2), "monoca: daemon %d is already running\n", p);
 		return -1;
 	}
-	sk := getsk();
-	if(sk == nil)
-		return -1;
+	# As a boot service under svcd, the daemon may start before the
+	# signer exists (firstboot still running, or an operator has not
+	# provisioned the host).  Wait for it instead of exiting into
+	# svcd's restart backoff.
+	sk: array of byte;
+	waiting := 0;
+	for(;;){
+		(sk, nil) = sgn->secret(SIGNER, keyfile);
+		if(sk != nil)
+			break;
+		if(!waiting){
+			sys->fprint(sys->fildes(2),
+				"monoca: waiting for a usable signer in %s\n", SIGNER);
+			waiting = 1;
+		}
+		sys->sleep(5000);
+	}
 	mkdir(DIR);
 	writefile(DIR + "/daemon", string sys->pctl(0, nil) + "\n");
 	last: array of byte;

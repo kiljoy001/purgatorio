@@ -398,6 +398,7 @@ builtinmod(char *name, void *vr, int rlen)
 	Type *t;
 	Module *m;
 	Link *l;
+	int n;
 
 	m = newmod(name);
 	if(rlen == 0){
@@ -412,7 +413,10 @@ builtinmod(char *name, void *vr, int rlen)
 		freemod(m);
 		return nil;
 	}
-	while(r->name) {
+	/* Bound the walk by the declared length: a generated table that
+	 * lost its terminating zero must not make the loader read past it.
+	 */
+	for(n = 0; n < rlen && r->name; n++) {
 		t = dtype(freeheap, r->size, r->map, r->np);
 		runtime(m, l, r->name, r->sig, r->fn, t);
 		r++;

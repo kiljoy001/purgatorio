@@ -64,13 +64,17 @@ later starts reuse it, so the trust-on-first-use fingerprint is stable.
 Connections are handled one process each, up to 32 at a time, with one
 slot held by the accept loop.  When every slot is busy the listener
 stops accepting, so the kernel backlog provides backpressure instead of
-unbounded memory.  A watchdog gives each connection a 20-second
-deadline and hangs up the underlying TCP conversation through its
+unbounded memory.  A watchdog gives the handshake 10 seconds and the
+request and response another 10, and hangs up the underlying TCP
+conversation through its
 .B ctl
-file if the handshake, the request or the response has not finished.
+file if the deadline passes.
 This covers a client that connects and sends nothing, and it interrupts
 a TLS 1.2 handshake that is blocked inside BearSSL.  A timed-out
 connection is reset, and the event is logged with the peer address.
+One address may hold at most 8 connections at once; further
+connections from it are closed and logged (at most once every 5
+seconds), so a single client cannot occupy every slot.
 .PP
 .B gemserve
 listens on TCP port 1965 on all interfaces.  The guest needs an
@@ -102,11 +106,10 @@ The TLS 1.3 handshake does not send session tickets or support
 resumption, and it requires the client to offer X25519 and an ECDSA
 P-256 signature.
 .PP
-The concurrency limit is a global 32 slots, not a per-address rate
-limit, and the 20-second deadline is one budget for the whole
-connection rather than separate handshake and request timeouts.  A
-client that completes a handshake and then reads slowly still occupies
-its slot until the deadline.
+The concurrency limit is 32 slots in total and 8 per address; there is
+no rate limit over time, so a client may reconnect as soon as its
+previous connection closes.  A client that reads the response slowly
+occupies its slot until the request deadline.
 .PP
 The control file is opened once at start; if it is absent the server
 does not retry.  The control state is a log: it is replayed from the

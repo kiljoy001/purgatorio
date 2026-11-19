@@ -31,6 +31,15 @@ tick	/dis/sh.dis -c 'echo tick; /dis/sleep.dis 3'
 -crash	/dis/willfail.dis
 .EE
 .PP
+The
+.B /lib/svcd.conf
+shipped with the image runs
+.I gemserve (8)
+and
+.I monoca (8)
+daemon; a host configuration replaces that file, so it must list every
+service the host wants.
+.PP
 A leading
 .B -
 disables a service without removing the line.

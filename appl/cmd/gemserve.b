@@ -47,7 +47,10 @@ CERT:	con "/keydb/gemini.cert";
 KEY:	con "/keydb/gemini.key";
 MAXKEYS:	con 64;
 NSLOT:	con 32;			# concurrent connections, including the accept
-CONNTIMEOUT:	con 20000;	# milliseconds per connection
+HSTIMEOUT:	con 10000;	# milliseconds for the handshake
+REQTIMEOUT:	con 10000;	# milliseconds for request and response
+MAXPEER:	con 64;		# tracked peer addresses
+PEERLIMIT:	con 8;		# concurrent connections from one address
 
 State: adt
 {
@@ -71,10 +74,16 @@ Peek: adt
 Watch: adt
 {
 	done:	int;
+	deadline: int;		# absolute millisecond deadline, movable
 };
 
 sem: chan of int;		# connection slots
 slock: chan of int;		# one-token lock for st
+plock: chan of int;		# one-token lock for the peer table
+paddr:	array of string;
+pcnt:	array of int;		# connections currently open per address
+plast:	array of int;		# last accepted, for eviction
+plog:	array of int;		# last "too many" message
 
 # Byte readers and builders used by the TLS 1.3 path.
 Rd: adt
@@ -118,6 +127,12 @@ init(nil: ref Draw->Context, args: list of string)
 		sem <-= 1;
 	slock = chan[1] of int;
 	slock <-= 1;
+	plock = chan[1] of int;
+	plock <-= 1;
+	paddr = array[MAXPEER] of string;
+	pcnt = array[MAXPEER] of int;
+	plast = array[MAXPEER] of int;
+	plog = array[MAXPEER] of int;
 
 	err := loadcert();
 	if(err != nil){
@@ -151,7 +166,19 @@ init(nil: ref Draw->Context, args: list of string)
 			sys->sleep(100);
 			continue;
 		}
-		spawn handle(fd);
+		path := sys->fd2path(fd);
+		peer := "";
+		if(path != nil)
+			peer = remoteof(path);
+		key := peerhost(peer);
+		if(!peeradd(key)){
+			sys->fprint(sys->fildes(2),
+				"gemserve: too many connections from %s\n", peer);
+			fd = nil;
+			sem <-= 1;
+			continue;
+		}
+		spawn handle(fd, path, key);
 	}
 
 }
@@ -159,15 +186,15 @@ init(nil: ref Draw->Context, args: list of string)
 # handle owns one connection.  The watchdog is told when the work is
 # done, and the worker waits for its acknowledgement before closing the
 # descriptor, so the watchdog can never hang up a reused conversation.
-handle(fd: ref Sys->FD)
+handle(fd: ref Sys->FD, path: string, peer: string)
 {
-	path := sys->fd2path(fd);
 	w := ref Watch;
 	w.done = 0;
+	w.deadline = sys->millisec() + HSTIMEOUT;
 	ack := chan[1] of int;
 	timed := 0;
 	if(path != nil){
-		spawn watchdog(path, CONNTIMEOUT, w, ack);
+		spawn watchdog(path, w, ack);
 		timed = 1;
 	}
 	{
@@ -176,9 +203,9 @@ handle(fd: ref Sys->FD)
 		p.hs = nil;
 		k := peekhello(fd, p);
 		if(k == 1)
-			serve13(fd, p.hs);
+			serve13(fd, p.hs, w);
 		else if(k == 0)
-			serve12(fd, p.raw);
+			serve12(fd, p.raw, w);
 	} exception e {
 	"*" =>
 		sys->fprint(sys->fildes(2), "gemserve: connection: %s\n", e);
@@ -187,29 +214,92 @@ handle(fd: ref Sys->FD)
 	if(timed)
 		<-ack;
 	fd = nil;
+	peerdel(peer);
 	sem <-= 1;
 }
 
-watchdog(path: string, ms: int, w: ref Watch, ack: chan of int)
+# The deadline is read every pass so the worker can shorten it to the
+# request budget once the handshake is done.
+watchdog(path: string, w: ref Watch, ack: chan of int)
 {
-	left := ms;
-	while(left > 0 && w.done == 0){
+	for(;;){
+		now := sys->millisec();
+		if(w.done || now >= w.deadline)
+			break;
+		left := w.deadline - now;
 		s := 100;
 		if(left < s)
 			s = left;
 		sys->sleep(s);
-		left -= s;
 	}
 	if(w.done == 0){
 		peer := remoteof(path);
 		if(peer == "")
-			sys->fprint(sys->fildes(2), "gemserve: timeout after %d ms\n", ms);
+			sys->fprint(sys->fildes(2), "gemserve: timeout\n");
 		else
 			sys->fprint(sys->fildes(2),
-				"gemserve: timeout after %d ms from %s\n", ms, peer);
+				"gemserve: timeout from %s\n", peer);
 		hangupctl(path);
 	}
 	ack <-= 1;
+}
+
+# ---- peer limits ------------------------------------------------------
+
+# peeradd accounts for one connection from a.  A peer that already has
+# PEERLIMIT connections is refused, and so is a new address when the
+# table has no free or evictable slot.  The check is concurrency, not a
+# rate, so a client that reconnects after closing is not penalised.
+peeradd(a: string): int
+{
+	if(a == "")
+		return 1;
+	<-plock;
+	now := sys->millisec();
+	slot := -1;
+	for(i := 0; i < MAXPEER; i++){
+		if(paddr[i] == a){
+			slot = i;
+			break;
+		}
+		if(slot < 0 && pcnt[i] == 0)
+			slot = i;
+	}
+	if(slot < 0){
+		plock <-= 1;
+		return 0;
+	}
+	if(pcnt[slot] >= PEERLIMIT){
+		logit := 0;
+		if(now - plog[slot] > 5000){
+			plog[slot] = now;
+			logit = 1;
+		}
+		plock <-= 1;
+		if(logit)
+			sys->fprint(sys->fildes(2),
+				"gemserve: peer limit reached for %s\n", a);
+		return 0;
+	}
+	paddr[slot] = a;
+	pcnt[slot]++;
+	plast[slot] = now;
+	plock <-= 1;
+	return 1;
+}
+
+peerdel(a: string)
+{
+	if(a == "")
+		return;
+	<-plock;
+	for(i := 0; i < MAXPEER; i++)
+		if(paddr[i] == a){
+			if(pcnt[i] > 0)
+				pcnt[i]--;
+			break;
+		}
+	plock <-= 1;
 }
 
 # The conversation directory is /net/tcp/N; ctl and remote live there.
@@ -233,6 +323,16 @@ hangupctl(path: string)
 		return;
 	sys->fprint(fd, "hangup");
 	fd = nil;
+}
+
+# The remote file is addr!port; limits are per address, not per
+# connection, so drop the port.
+peerhost(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '!')
+			return s[0:i];
+	return s;
 }
 
 remoteof(path: string): string
@@ -468,13 +568,14 @@ page(): string
 	return s;
 }
 
-serve12(fd: ref Sys->FD, pre: array of byte)
+serve12(fd: ref Sys->FD, pre: array of byte, w: ref Watch)
 {
 	(h, err) := tls->acceptpre(fd.fd, cert, key, pre);
 	if(h < 0){
 		sys->fprint(sys->fildes(2), "gemserve: tls: %s\n", err);
 		return;
 	}
+	w.deadline = sys->millisec() + REQTIMEOUT;
 	buf := array[1024] of byte;
 	n := tls->read(h, buf);
 	if(n > 0)
@@ -587,7 +688,7 @@ is13(hs: array of byte): int
 
 # ---- TLS 1.3 ---------------------------------------------------------
 
-serve13(fd: ref Sys->FD, hello: array of byte)
+serve13(fd: ref Sys->FD, hello: array of byte, w: ref Watch)
 {
 	# ---- ClientHello (already read by peekhello) ----
 	r := ref Rd(hello, len hello, 0);
@@ -799,6 +900,10 @@ serve13(fd: ref Sys->FD, hello: array of byte)
 		return;
 	}
 	tlen = tapp(tr, tlen, hsmsg(20, cfin));
+
+	# The handshake is done; from here the request and response get
+	# their own budget.
+	w.deadline = sys->millisec() + REQTIMEOUT;
 
 	# ---- application keys ----
 	capp := derivsec(master, "c ap traffic", thapp);
