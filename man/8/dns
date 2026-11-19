@@ -57,6 +57,11 @@ is specified and local resolvers are given in the configuration file,
 .I dns
 will query them first for all addresses, before resorting to external DNS servers.
 .PP
+Queries are sent over UDP.  If a reply has the truncated bit set,
+.I dns
+retries the same server over TCP, so an answer that does not fit in a
+UDP datagram is still returned in full.
+.PP
 .I Dnsquery
 queries the given
 .I server

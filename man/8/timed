@@ -48,15 +48,19 @@ and Google
 The query runs in its own process.  If a server never answers, that
 process remains blocked and no further attempts are made until
 restart; the boot clock stays in place and status keeps being
-published.  A reachable server answers immediately.  After a successful exchange it computes
-offset and round-trip delay from the four timestamps and steps
+published.  A reachable server answers immediately.  After a successful
+exchange it computes offset and round-trip delay from the four
+timestamps and steps
 .B /dev/time
 when the offset exceeds one second, or when the clock has not yet been
-verified by SNTP.  Smaller offsets are reported but not corrected.
+verified by SNTP.  A smaller offset is removed a fraction at a time:
+every second it moves the clock by one eighth of what remains, capped
+at 100 ms, so the wall clock never jumps and second-resolution users
+see it run slightly fast or slow until the error is gone.
 .PP
 The service republishes
 .BI dir /status
-after each sync and every interval:
+every second:
 .PP
 .RS
 .EX
@@ -70,9 +74,12 @@ stratum=N
 last=unixseconds
 now=microseconds
 mono=milliseconds
+pending_us=N
 .EE
 .RE
 .PP
+.B pending_us
+is the part of the last measured offset still to be slewed.
 .B now
 and
 .B mono
@@ -114,9 +121,12 @@ last published state
 .IR millisec (2),
 .IR sys (2)
 .SH BUGS
-Offsets are stepped, not slewed, so a later correction can move the
-wall clock backwards.  Leap seconds, NTP authentication and server
-selection by stratum are not implemented; SNTP replies are accepted
+A step is still used for an offset over one second or for the first
+SNTP correction, and it can move the wall clock backwards.  The slew
+only starts after a measurement, so a drift that accumulates between
+syncs is corrected at the next one; at 100 ms per second a one-second
+error takes about fifteen seconds to remove.  Leap seconds, NTP
+authentication and server selection by stratum are not implemented; SNTP replies are accepted
 from the first configured server that answers.  A blackholed server
 leaves one query process blocked and disables further SNTP attempts
 until restart.  The default list is

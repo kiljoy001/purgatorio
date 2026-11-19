@@ -163,6 +163,7 @@ TARG=\
 	tee.dis\
 	telnet.dis\
 	test.dis\
+	timed.dis\
 	time.dis\
 	timestamp.dis\
 	tkcmd.dis\
@@ -247,3 +248,4 @@ vacput.dis:	$MODDIR/vac.m $MODDIR/venti.m
 monoca.dis:	$MODDIR/mono.m $MODDIR/merkle.m $MODDIR/monosigner.m
 monoauthtest.dis:	$MODDIR/mono.m $MODDIR/monoauth.m $MODDIR/merkle.m $MODDIR/monosigner.m $MODDIR/dial.m
 mcheck.dis:	$MODDIR/mono.m $MODDIR/merkle.m $MODDIR/monosigner.m
+timed.dis:	$MODDIR/dial.m

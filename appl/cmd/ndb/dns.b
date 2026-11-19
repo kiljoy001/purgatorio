@@ -1765,6 +1765,7 @@ udpquery(fd: ref Sys->FD, id: int, query: array of byte, sname: string, addr: re
 		return (nil, "not A resource");
 	}
 	dm: ref DNSmsg;
+	trunc := 0;
 	pidc := chan of int;
 	c := chan of array of byte;
 	spawn reader(fd, c, pidc);
@@ -1790,11 +1791,13 @@ udpquery(fd: ref Sys->FD, id: int, query: array of byte, sname: string, addr: re
 				return (nil, "bad udp reply message");
 			}
 			if(dm.flags & Fresp && dm.id == id){
-				if(dm.flags & Ftrunc && dm.ns == nil){
+				if(dm.flags & Ftrunc){
 					if(debug)
 						sys->print("id=%d was truncated\n", dm.id);
-				}else
+					trunc = 1;
 					break;
+				}
+				break;
 			}else if(debug)
 				sys->print("id=%d got flags #%ux id %d\n", id, dm.flags, dm.id);
 		}else if(debug)
@@ -1802,6 +1805,8 @@ udpquery(fd: ref Sys->FD, id: int, query: array of byte, sname: string, addr: re
 	}
 	kill(tpid);
 	kill(rpid);
+	if(trunc)
+		return tcpquery(query, addr);
 	if(dm == nil)
 		return (nil, "no reply");
 	if(dm.err != nil){
@@ -1851,8 +1856,11 @@ dialquery(query: array of byte, sname: string, addr: ref RR): (ref DNSmsg, strin
 		return (nil, sys->sprint("%s: bad reply", raddr));
 	if(!(dm.flags & Fresp) || dm.id != id)
 		return (nil, sys->sprint("%s: bad reply id", raddr));
-	if(dm == nil)
-		return (nil, sys->sprint("%s: no reply", raddr));
+	if(dm.flags & Ftrunc){
+		if(debug)
+			sys->print("id=%d truncated; retrying over tcp\n", dm.id);
+		return tcpquery(query, addr);
+	}
 	if(dm.err != nil)
 		return (nil, dm.err);
 	return (dm, nil);
@@ -1909,32 +1917,41 @@ udpport(): ref Sys->FD
 #
 # TCP/IP can be used to get the whole of a truncated message
 #
-tcpquery(query: array of byte): (ref DNSmsg, string)
+tcpquery(query: array of byte, addr: ref RR): (ref DNSmsg, string)
 {
-	# TO DO: check request id, ports etc.
-
-	ipa := query[Udpraddr+IPv4off:];
-	addr := sys->sprint("tcp!%d.%d.%d.%d!%d", int ipa[0], int ipa[1], int ipa[2], int ipa[3], DNSport);
-	conn := dial->dial(addr, nil);
+	ipa: array of byte;
+	pick ar := addr {
+	A =>
+		ipa = ar.rdata[0:4];
+	* =>
+		return (nil, "not an A resource");
+	}
+	raddr := sys->sprint("tcp!%d.%d.%d.%d!%d", int ipa[0], int ipa[1],
+		int ipa[2], int ipa[3], DNSport);
+	conn := dial->dial(raddr, nil);
 	if(conn == nil)
-		return (nil, sys->sprint("can't dial %s: %r", addr));
-	query = query[Udphdrsize-2:];
-	put2(query, 0, len query-2);	# replace UDP header by message length
-	n := sys->write(conn.dfd, query[Udphdrsize:], len query);
-	if(n != len query)
-		return (nil, sys->sprint("dns: %s: write err: %r", addr));
-	buf := readn(conn.dfd, 2);	# TCP/DNS record header
+		return (nil, sys->sprint("can't dial %s: %r", raddr));
+	msg := query[Udphdrsize:];
+	hdr := array[2] of byte;
+	hdr[0] = byte (len msg >> 8);
+	hdr[1] = byte (len msg & 16rff);
+	if(sys->write(conn.dfd, hdr, 2) != 2 ||
+	   sys->write(conn.dfd, msg, len msg) != len msg)
+		return (nil, sys->sprint("dns: %s: write err: %r", raddr));
+	buf := readn(conn.dfd, 2);
+	if(buf == nil)
+		return (nil, sys->sprint("dns: %s: short reply header", raddr));
 	(mlen, nil) := get2(buf, 0);
 	if(mlen < 2 || mlen > 16384)
-		return (nil, sys->sprint("dns: %s: bad reply msg length=%d", addr, mlen));
+		return (nil, sys->sprint("dns: %s: bad reply msg length=%d", raddr, mlen));
 	buf = readn(conn.dfd, mlen);
 	if(buf == nil)
-		return (nil, sys->sprint("dns: %s: read err: %r", addr));
+		return (nil, sys->sprint("dns: %s: read err: %r", raddr));
 	dm := DNSmsg.unpack(buf);
 	if(dm == nil)
 		return (nil, "dns: bad reply message");
 	if(dm.err != nil){
-		sys->fprint(stderr, "dns: %s: bad reply: %s\n", addr, dm.err);
+		sys->fprint(stderr, "dns: %s: bad reply: %s\n", raddr, dm.err);
 		return (nil, dm.err);
 	}
 	return (dm, nil);

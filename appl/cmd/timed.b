@@ -35,6 +35,8 @@ NDB:	con "/lib/ndb/time";
 HOSTTIME: con "/n/host/time";
 FLOOR:	con big 1577836800000000;	# 2020-01-01, unix us
 STEP:	con big 1000000;		# step when |offset| exceeds 1s
+SLEW:	con big 100000;		# most the clock may move in one second
+MINSLEW: con big 2000;		# below this, leave the clock alone
 NTPDELTA: con big 2208988800;		# 1900 -> 1970, seconds
 
 St: adt
@@ -49,6 +51,8 @@ St: adt
 	delay:	big;
 	stratum: int;
 	last:	big;		# unix seconds of last good sync
+	pend:	big;		# microseconds left to slew
+	nextsync: int;		# monotonic ms of the next attempt
 };
 
 st: ref St;
@@ -62,7 +66,7 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->print("timed: cannot load dial: %r\n");
 		return;
 	}
-	st = ref St(DIR, nil, "", 900, 0, "", big 0, big 0, 0, big 0);
+	st = ref St(DIR, nil, "", 900, 0, "", big 0, big 0, 0, big 0, big 0, 0);
 	if(args != nil)
 		args = tl args;
 	for(; args != nil; args = tl args){
@@ -116,10 +120,11 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	for(;;){
-		if(st.servers != nil && !busy)
+		if(st.servers != nil && !busy && sys->millisec() >= st.nextsync)
 			spawn dosync();
+		slewstep();
 		publish();
-		sys->sleep(st.interval * 1000);
+		sys->sleep(1000);
 	}
 }
 
@@ -158,9 +163,36 @@ readndb()
 status(): string
 {
 	cur := readtime();
-	return sys->sprint("source=%s\nsynced=%d\nverified=%d\nserver=%s\noffset_us=%bd\ndelay_us=%bd\nstratum=%d\nlast=%bd\nnow=%bd\nmono=%d\n",
+	return sys->sprint("source=%s\nsynced=%d\nverified=%d\nserver=%s\noffset_us=%bd\ndelay_us=%bd\nstratum=%d\nlast=%bd\nnow=%bd\nmono=%d\npending_us=%bd\n",
 		st.source, st.synced, (st.source == "sntp"), st.server,
-		st.offset, st.delay, st.stratum, st.last, cur, sys->millisec());
+		st.offset, st.delay, st.stratum, st.last, cur, sys->millisec(),
+		st.pend);
+}
+
+# Move the wall clock a fraction of the remaining error.  Cap the
+# change per second so the clock is monotonic at second resolution even
+# when the correction is large.
+slewstep()
+{
+	if(st.pend == big 0)
+		return;
+	d := st.pend / big 8;
+	if(d == big 0){
+		if(st.pend > big 0)
+			d = big 1;
+		else
+			d = big -1;
+	}
+	if(d > SLEW)
+		d = SLEW;
+	if(d < -SLEW)
+		d = -SLEW;
+	cur := readtime();
+	if(settime(cur + d) == nil){
+		st.pend -= d;
+		if(abs(st.pend) < big 1000)
+			st.pend = big 0;
+	}
 }
 
 # ---- SNTP -------------------------------------------------------------
@@ -194,17 +226,26 @@ dosync()
 				sys->print("timed: set: %s\n", e);
 				continue;
 			}
+			st.pend = big 0;
 			st.source = "sntp";
 			st.synced = 1;
 			sys->print("timed: %s: stepped %bd us (delay %bd)\n",
 				srv, off, del);
+		}else if(abs(off) > MINSLEW){
+			# Small errors are removed a fraction per second, so
+			# the wall clock never jumps backwards or forwards.
+			st.pend = off;
+			sys->print("timed: %s: slew %bd us (delay %bd)\n",
+				srv, off, del);
 		}else{
-			sys->print("timed: %s: offset %bd us below step threshold\n",
-				srv, off);
+			st.pend = big 0;
+			sys->print("timed: %s: within %bd us\n", srv, MINSLEW);
 		}
 		st.last = (cur + off) / big 1000000;
 		break;
 	}
+	# Keep the attempt rate at interval even when every server fails.
+	st.nextsync = sys->millisec() + st.interval * 1000;
 	busy = 0;
 }
 

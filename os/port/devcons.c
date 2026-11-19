@@ -660,6 +660,7 @@ static Dirtab consdir[]=
 };
 
 ulong	boottime;		/* seconds since epoch at boot */
+static long	bootusec;		/* sub-second part, 0..999999 */
 
 long
 seconds(void)
@@ -670,13 +671,13 @@ seconds(void)
 vlong
 mseconds(void)
 {
-	return ((vlong)boottime*1000)+((vlong)(TK2MS(MACHP(0)->ticks)));
+	return ((vlong)boottime*1000)+((vlong)(TK2MS(MACHP(0)->ticks)))+bootusec/1000;
 }
 
 vlong
 osusectime(void)
 {
-	return (((vlong)boottime*1000)+((vlong)(TK2MS(MACHP(0)->ticks)))*1000);
+	return (((vlong)boottime*1000000)+((vlong)(TK2MS(MACHP(0)->ticks)))*1000)+bootusec;
 }
 
 vlong
@@ -978,7 +979,7 @@ consread(Chan *c, void *buf, long n, vlong offset)
 			return qread(kscanq, buf, n);
 
 	case Qtime:
-		snprint(tmp, sizeof(tmp), "%.lld", (vlong)mseconds()*1000);
+		snprint(tmp, sizeof(tmp), "%.lld", osusectime());
 		return readstr(offset, buf, n, tmp);
 
 	case Qhostowner:
@@ -1112,8 +1113,18 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 			n = sizeof(buf)-1;
 		strncpy(buf, a, n);
 		buf[n] = 0;
-		t = strtoll(buf, 0, 0)/1000000;
-		boottime = t - TK2SEC(MACHP(0)->ticks);
+		/*
+		 * The value is microseconds, and the sub-second part is
+		 * kept so a slew can move the clock by less than a
+		 * second instead of stepping it.
+		 */
+		t = strtoll(buf, 0, 0);
+		boottime = t/1000000 - TK2SEC(MACHP(0)->ticks);
+		bootusec = t % 1000000;
+		if(bootusec < 0){
+			bootusec += 1000000;
+			boottime--;
+		}
 		break;
 
 	case Qhostowner:
