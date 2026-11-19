@@ -55,12 +55,31 @@ struct Vmdisplay {
 	uint	input_tail;
 	char	input[Vmdevents][Vmdeventbytes];
 	uint	pixels[Vmdslots][Vmdwidth*Vmdheight];
+	uint	scale;		/* percent, 100 = 1:1, for the viewer */
 };
 
 static Vmdisplay *vmdisp;
 static uint vmdispserial;
 static int vmdispnextslot;
 static int vmdispbuttons;
+static int vmdispscaleval = 100;
+
+int
+vmdispgetscale(void)
+{
+	return vmdispscaleval;
+}
+
+int
+vmdispsetscale(int v)
+{
+	if(v < 25 || v > 400)
+		return -1;
+	vmdispscaleval = v;
+	if(vmdisp != nil)
+		vmdisp->scale = v;
+	return 0;
+}
 
 static void
 vmdispflush(VGAscr *scr, Rectangle r)
@@ -210,6 +229,7 @@ vmdispinit(void)
 	vmdispnextslot = 0;
 	vmdisp->state[0] = VmdFree;
 	vmdisp->state[1] = VmdFree;
+	vmdisp->scale = vmdispscaleval;
 
 	scr = &vgascreen[0];
 	scr->dev = &vmdispdev;

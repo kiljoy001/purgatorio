@@ -74,6 +74,12 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 	sys->bind("#c", "/dev", sys->MAFTER); 	# console device
 	sys->bind("#W","/dev",sys->MAFTER);	# Flash
 	sys->create("/net.alt", Sys->OREAD, 8r777|Sys->DMDIR);
+
+	# The root image's /dis is read-only.  A writable overlay, bound
+	# after it, is where the control page installs dropped programs.
+	if(sys->create("/dislocal", Sys->OREAD, Sys->DMDIR|8r777) == nil)
+		;	# already there
+	sys->bind("/dislocal", "/dis", Sys->MAFTER);
 #	sys->bind("#O", "/dev", sys->MAFTER);	# Modem
 #	sys->bind("#T","/dev",sys->MAFTER);	# Touchscreen
 

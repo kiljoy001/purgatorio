@@ -42,10 +42,18 @@ Gemserve: module
 	init:	fn(nil: ref Draw->Context, args: list of string);
 };
 
+Mount: module
+{
+	init:	fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
 CTL:	con "/n/host/gem/ctl";
 CERT:	con "/keydb/gemini.cert";
 KEY:	con "/keydb/gemini.key";
-MAXKEYS:	con 64;
+DROP:	con "/n/host/dis";	# host drop directory for .dis files
+LOCAL:	con "/dislocal";	# writable overlay bound after /dis
+STORE:	con "/n/store";		# default 9P mount point
+SCALE:	con "#g/scale";		# display scale device
 NSLOT:	con 32;			# concurrent connections, including the accept
 HSTIMEOUT:	con 10000;	# milliseconds for the handshake
 REQTIMEOUT:	con 10000;	# milliseconds for request and response
@@ -54,12 +62,10 @@ PEERLIMIT:	con 8;		# concurrent connections from one address
 
 State: adt
 {
-	title:	string;
-	text:	string;
-	keys:	array of string;
-	vals:	array of string;
-	nkeys:	int;
-	nctl:	int;
+	msg:	string;
+	scale:	int;
+	mountsrc:	string;
+	mountpath:	string;
 };
 
 st: ref State;
@@ -115,13 +121,9 @@ init(nil: ref Draw->Context, args: list of string)
 		return;
 	}
 
-	st = ref State("gemd", "", nil, nil, 0, 0);
-	st.keys = array[MAXKEYS] of string;
-	st.vals = array[MAXKEYS] of string;
-	for(i := 0; i < MAXKEYS; i++){
-		st.keys[i] = "";
-		st.vals[i] = "";
-	}
+	st = ref State("", 100, "", "");
+	st.scale = readscale();
+	i: int;
 	sem = chan[NSLOT] of int;
 	for(i = 0; i < NSLOT; i++)
 		sem <-= 1;
@@ -373,11 +375,13 @@ loadcert(): string
 {
 	cfd := sys->open(CERT, Sys->OREAD);
 	if(cfd != nil){
+		cfd = nil;
 		cert = readfile(CERT);
 		key = readfile(KEY);
-		if(cert == nil || key == nil || len key != 32)
-			return "bad certificate in /keydb";
-		return nil;
+		if(cert != nil && key != nil && len key == 32)
+			return nil;
+		# An interrupted first start can leave half a pair behind;
+		# mint a fresh one instead of staying down.
 	}
 
 	now := daytime->now();
@@ -389,8 +393,10 @@ loadcert(): string
 		utc(now + 10*365*24*3600));
 	if(e != nil)
 		return e;
-	if(writefile(CERT, c, 8r600) < 0 ||
-	   writefile(KEY, k, 8r600) < 0)
+	# Key first: a certificate without its key is unusable, and the
+	# check above re-mints the pair.
+	if(writefile(KEY, k, 8r600) < 0 ||
+	   writefile(CERT, c, 8r600) < 0)
 		return "cannot write /keydb certificate";
 	cert = c;
 	key = k;
@@ -407,15 +413,24 @@ utc(t: int): string
 
 readfile(path: string): array of byte
 {
+	(ok, d) := sys->stat(path);
+	if(ok < 0 || d.length <= big 0 || d.length > big (16<<20))
+		return nil;
+	data := array[int d.length] of byte;
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return nil;
-	buf := array[4096] of byte;
-	n := sys->read(fd, buf, len buf);
+	off := 0;
+	while(off < len data){
+		n := sys->read(fd, data[off:], len data - off);
+		if(n <= 0)
+			break;
+		off += n;
+	}
 	fd = nil;
-	if(n <= 0)
+	if(off != len data)
 		return nil;
-	return buf[0:n];
+	return data;
 }
 
 writefile(path: string, data: array of byte, perm: int): int
@@ -423,9 +438,14 @@ writefile(path: string, data: array of byte, perm: int): int
 	fd := sys->create(path, Sys->OWRITE, perm);
 	if(fd == nil)
 		return -1;
-	if(sys->write(fd, data, len data) != len data){
-		fd = nil;
-		return -1;
+	off := 0;
+	while(off < len data){
+		n := sys->write(fd, data[off:], len data - off);
+		if(n <= 0){
+			fd = nil;
+			return -1;
+		}
+		off += n;
 	}
 	fd = nil;
 	return 0;
@@ -481,11 +501,10 @@ apply(line: string)
 {
 	if(line == "")
 		return;
-	lock();
 	cmd := line;
 	rest := "";
 	for(i := 0; i < len line; i++)
-		if(line[i] == ' '){
+		if(line[i] == ' ' || line[i] == '\t'){
 			cmd = line[0:i];
 			rest = line[i+1:];
 			break;
@@ -493,28 +512,43 @@ apply(line: string)
 	while(len rest > 0 && (rest[0] == ' ' || rest[0] == '\t'))
 		rest = rest[1:];
 
+	msg := "";
 	case cmd {
-	"title" =>
-		st.title = rest;
-	"text" =>
-		st.text += rest + "\n";
-	"set" =>
-		(k, v) := split2(rest);
-		if(k != "")
-			setkey(k, v);
-	"del" =>
-		delkey(rest);
+	"scale" =>
+		v := int trimnl(rest);
+		e := "";
+		if(v < 25 || v > 400)
+			e = "scale: want 25..400";
+		else
+			e = setscale(v);
+		if(e != "")
+			msg = e;
+		else{
+			lock();
+			st.scale = v;
+			unlock();
+		}
+	"install" =>
+		# Installing and mounting can wait on another file server;
+		# keep the page available while they do.
+		msg = install(rest);
+	"mount" =>
+		(src, path) := split2(rest);
+		msg = mountone(src, path);
+	"unmount" =>
+		msg = unmountone(rest);
 	"clear" =>
-		clear();
+		msg = "";
 	}
-	st.nctl++;
+	lock();
+	st.msg = msg;
 	unlock();
 }
 
 split2(s: string): (string, string)
 {
 	for(i := 0; i < len s; i++)
-		if(s[i] == ' '){
+		if(s[i] == ' ' || s[i] == '\t'){
 			v := s[i+1:];
 			while(len v > 0 && (v[0] == ' ' || v[0] == '\t'))
 				v = v[1:];
@@ -523,38 +557,108 @@ split2(s: string): (string, string)
 	return (s, "");
 }
 
-setkey(k, v: string)
+# ---- display scale ----------------------------------------------------
+
+readscale(): int
 {
-	for(i := 0; i < st.nkeys; i++)
-		if(st.keys[i] == k){
-			st.vals[i] = v;
-			return;
-		}
-	if(st.nkeys < MAXKEYS){
-		st.keys[st.nkeys] = k;
-		st.vals[st.nkeys] = v;
-		st.nkeys++;
+	fd := sys->open(SCALE, Sys->OREAD);
+	if(fd == nil)
+		return 100;
+	b := array[32] of byte;
+	n := sys->read(fd, b, len b);
+	fd = nil;
+	if(n <= 0)
+		return 100;
+	s := string b[0:n];
+	v := 0;
+	for(i := 0; i < len s; i++){
+		if(s[i] < '0' || s[i] > '9')
+			break;
+		v = v * 10 + (s[i] - '0');
 	}
+	if(v < 25 || v > 400)
+		return 100;
+	return v;
 }
 
-delkey(k: string)
+setscale(v: int): string
 {
-	for(i := 0; i < st.nkeys; i++)
-		if(st.keys[i] == k){
-			for(j := i; j < st.nkeys - 1; j++){
-				st.keys[j] = st.keys[j+1];
-				st.vals[j] = st.vals[j+1];
-			}
-			st.nkeys--;
-			return;
-		}
+	fd := sys->open(SCALE, Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("scale: %r");
+	if(sys->fprint(fd, "scale %d", v) < 0){
+		fd = nil;
+		return sys->sprint("scale: %r");
+	}
+	fd = nil;
+	return "";
 }
 
-clear()
+# ---- programs ---------------------------------------------------------
+
+install(name: string): string
 {
-	st.title = "gemd";
-	st.text = "";
-	st.nkeys = 0;
+	name = trimnl(name);
+	if(name == "" || contains(name, "/") || name == "." || name == "..")
+		return "install: bad name";
+	data := readfile(DROP + "/" + name);
+	if(data == nil)
+		return "install: " + DROP + "/" + name + ": not found";
+	if(writefile(LOCAL + "/" + name, data, 8r755) < 0)
+		return sys->sprint("install: %r");
+	return "";
+}
+
+# ---- storage ----------------------------------------------------------
+
+mountone(src, path: string): string
+{
+	src = trimnl(src);
+	path = trimnl(path);
+	if(src == "")
+		return "mount: no source";
+	if(path == "")
+		path = STORE;
+	if(!prefix(src, "tcp!") && !prefix(src, "udp!") &&
+	   !prefix(src, "unix!") && src[0] != '#' && src[0] != '/')
+		src = "tcp!" + src;
+	if(mkdirp(path) < 0)
+		return "mount: cannot create " + path;
+	sys->unmount(nil, path);	# replace an existing mount
+	m := load Mount "/dis/mount.dis";
+	if(m == nil)
+		return "mount: cannot load /dis/mount.dis";
+	{
+		m->init(nil, "mount" :: "-A" :: src :: path :: nil);
+	} exception e {
+	"*" =>
+		return "mount: " + e;
+	}
+	lock();
+	st.mountsrc = src;
+	st.mountpath = path;
+	unlock();
+	return "";
+}
+
+unmountone(path: string): string
+{
+	path = trimnl(path);
+	lock();
+	if(path == "")
+		path = st.mountpath;
+	unlock();
+	if(path == "")
+		path = STORE;
+	if(sys->unmount(nil, path) < 0)
+		return sys->sprint("unmount: %r");
+	lock();
+	if(path == st.mountpath){
+		st.mountsrc = "";
+		st.mountpath = "";
+	}
+	unlock();
+	return "";
 }
 
 # ---- page -------------------------------------------------------------
@@ -562,17 +666,201 @@ clear()
 page(): string
 {
 	lock();
-	s := "# " + st.title + "\n\n";
-	if(st.text != "")
-		s += st.text + "\n";
-	s += "## data\n\n";
-	if(st.nkeys == 0)
-		s += "no data\n";
-	for(i := 0; i < st.nkeys; i++)
-		s += st.keys[i] + ": " + st.vals[i] + "\n";
-	s += "\n## server\n\nctl writes " + string st.nctl + "\n";
+	s := "# 9vm\n";
+	if(st.msg != "")
+		s += "\n" + st.msg + "\n";
+	s += "\n=> /scale scale " + string st.scale + "%\n";
+
+	s += "\n## programs\n";
+	fd := sys->open(DROP, Sys->OREAD);
+	found := 0;
+	if(fd != nil){
+		for(;;){
+			(n, d) := sys->dirread(fd);
+			if(n <= 0)
+				break;
+			for(i := 0; i < n; i++){
+				nm := d[i].name;
+				if(!hassuffix(nm, ".dis"))
+					continue;
+				found++;
+				label := nm + " (" + sys->sprint("%bd", d[i].length) + "B";
+				(ok, nil) := sys->stat(LOCAL + "/" + nm);
+				if(ok >= 0)
+					label += ", installed";
+				s += "=> /dis/" + nm + " " + label + ")\n";
+			}
+		}
+		fd = nil;
+	}
+	if(found == 0)
+		s += "none\n";
+
+	s += "\n## storage\n";
+	if(st.mountpath == "")
+		s += "none\n";
+	else
+		s += st.mountsrc + " on " + st.mountpath + "\n";
 	unlock();
 	return s;
+}
+
+# ---- content ----------------------------------------------------------
+
+requestpath(req: string): string
+{
+	s := trimnl(req);
+	if(prefix(s, "gemini://")){
+		s = s[9:];
+		i := 0;
+		while(i < len s && s[i] != '/' && s[i] != '?' && s[i] != '\r')
+			i++;
+		if(i >= len s || s[i] != '/')
+			return "/";
+		s = s[i:];
+	}
+	if(!prefix(s, "/"))
+		s = "/" + s;
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\r' || s[i] == '\n'){
+			s = s[0:i];
+			break;
+		}
+	return s;
+}
+
+# Split a request target into its path and query.
+splitquery(s: string): (string, string)
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '?')
+			return (s[0:i], s[i+1:]);
+	return (s, "");
+}
+
+# A Gemini input reply is usually just the query, but some clients send
+# the whole URL back, so accept both.
+scalevalue(q: string): int
+{
+	s := trimnl(q);
+	if(prefix(s, "/scale?"))
+		s = s[7:];
+	else if(prefix(s, "scale?"))
+		s = s[6:];
+	if(prefix(s, "scale="))
+		s = s[6:];
+	v := 0;
+	if(s == "")
+		return 0;
+	for(i := 0; i < len s; i++){
+		if(s[i] < '0' || s[i] > '9')
+			break;
+		v = v * 10 + (s[i] - '0');
+		if(v > 10000)
+			return 0;
+	}
+	return v;
+}
+
+# /dis/NAME is a drop file, for distribution to another node; /scale is
+# the one interactive control; anything else is the status page.
+content(req: string): (string, array of byte)
+{
+	(path, q) := splitquery(requestpath(req));
+
+	if(path == "/scale"){
+		if(q == ""){
+			lock();
+			now := st.scale;
+			unlock();
+			return ("10 " + sys->sprint("scale %d%%", now) + "\r\n", nil);
+		}
+		v := scalevalue(q);
+		if(v < 25 || v > 400)
+			return ("59 want 25..400\r\n", nil);
+		if((e := setscale(v)) != ""){
+			lock();
+			st.msg = e;
+			unlock();
+			return ("40 " + e + "\r\n", nil);
+		}
+		lock();
+		st.scale = v;
+		st.msg = "";
+		unlock();
+		return ("30 /\r\n", nil);
+	}
+
+	if(prefix(path, "/dis/")){
+		name := path[5:];
+		if(name == "" || contains(name, "/") || name == "." || name == "..")
+			return ("51 bad request\r\n", nil);
+		data := readfile(DROP + "/" + name);
+		if(data == nil)
+			return ("51 not found\r\n", nil);
+		return ("20 application/octet-stream\r\n", data);
+	}
+	return ("20 text/gemini\r\n", array of byte page());
+}
+
+# ---- helpers ----------------------------------------------------------
+
+trimnl(s: string): string
+{
+	while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == '\r' ||
+			    s[len s-1] == ' ' || s[len s-1] == '\t'))
+		s = s[0:len s-1];
+	while(len s > 0 && (s[0] == ' ' || s[0] == '\t'))
+		s = s[1:];
+	return s;
+}
+
+prefix(s, p: string): int
+{
+	if(len s < len p)
+		return 0;
+	return s[0:len p] == p;
+}
+
+hassuffix(s, p: string): int
+{
+	if(len s < len p)
+		return 0;
+	return s[len s-len p:] == p;
+}
+
+contains(s, sub: string): int
+{
+	if(len sub == 0)
+		return 1;
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
+statok(path: string): int
+{
+	(ok, nil) := sys->stat(path);
+	return ok >= 0;
+}
+
+mkdirp(path: string): int
+{
+	if(path == "" || path == "/")
+		return 0;
+	if(statok(path))
+		return 0;
+	i := len path - 1;
+	while(i > 0 && path[i] == '/')
+		i--;
+	while(i > 0 && path[i] != '/')
+		i--;
+	if(i > 0)
+		mkdirp(path[0:i]);
+	if(sys->create(path, Sys->OREAD, Sys->DMDIR|8r777) == nil)
+		return -1;
+	return 0;
 }
 
 serve12(fd: ref Sys->FD, pre: array of byte, w: ref Watch)
@@ -585,10 +873,14 @@ serve12(fd: ref Sys->FD, pre: array of byte, w: ref Watch)
 	w.deadline = sys->millisec() + REQTIMEOUT;
 	buf := array[1024] of byte;
 	n := tls->read(h, buf);
-	if(n > 0)
-		sys->print("gemserve: (tls1.2) request %s\n", string buf[0:n]);
-	resp := "20 text/gemini\r\n" + page();
-	tls->write(h, array of byte resp);
+	req := "";
+	if(n > 0){
+		req = string buf[0:n];
+		sys->print("gemserve: (tls1.2) request %s\n", req);
+	}
+	(hdr, body) := content(requestpath(req));
+	resp := cat(array of byte hdr, body);
+	tls->write(h, resp);
 	tls->close(h);
 }
 
@@ -933,9 +1225,10 @@ serve13(fd: ref Sys->FD, hello: array of byte, w: ref Watch)
 	}
 	if(len adata > 0)
 		sys->print("gemserve: (tls1.3) request %s\n", string adata);
-	resp := "20 text/gemini\r\n" + page();
+	(hdr, cbody) := content(requestpath(string adata));
+	resp := cat(array of byte hdr, cbody);
 	rrec: array of byte;
-	(rrec, err) = sealrec(fd, 23, array of byte resp, sakk, saiv, 0);
+	(rrec, err) = sealrec(fd, 23, resp, sakk, saiv, 0);
 	if(err != nil)
 		return;
 	writeall(fd, rrec);

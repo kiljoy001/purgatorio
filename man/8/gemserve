@@ -6,9 +6,9 @@ gemserve \- Gemini server driven by a 9P control file
 .RI [ ctlfile ]
 .SH DESCRIPTION
 .B gemserve
-runs in the Purgatorio guest.  It follows an append-only control file,
-synthesizes a gemtext page from the commands it reads, and serves that
-page over TLS 1.3 or TLS 1.2 on the same port.
+runs in the Purgatorio guest.  It serves a fixed status and control
+page over TLS 1.3 or TLS 1.2, and applies commands appended to a control
+file by the host.
 .PP
 Each connection is peeked at before the handshake.  If the ClientHello
 offers TLS 1.3 (supported_versions 0x0304, X25519, and
@@ -30,26 +30,80 @@ The default control file is
 .BR /n/host/gem/ctl ,
 a 9P mount of a file on the host; the guest only reads it.
 .PP
-The control language is line oriented:
+The control language is line oriented.  Unknown commands are ignored,
+so an older control file is harmless.
 .TP
-.BI title " text"
-Set the page title.
+.BI scale " N"
+Set the display scale to
+.I N
+percent (25 to 400).  The value is written to
+.B #g/scale
+and to the
+.B scale
+field of the shared
+.B vmdisplay
+header, where a viewer can pick it up.  The guest frame stays
+1024x768.
 .TP
-.BI text " line"
-Append one line of gemtext.
+.BI install " name"
+Copy
+.BI /n/host/dis/ name
+to the writable overlay
+.BR /dislocal ,
+which init binds after
+.B /dis
+in the shared namespace.  The program then appears as
+.BI /dis/ name.
 .TP
-.BI set " key value"
-Set or replace a data key; the value may contain spaces.
+.BI mount " src"
+.RI [ path ]
+Mount a 9P server at
+.I path
+(default
+.BR /n/store ).
+.I src
+may be a dial address
+.RB ( tcp!host!port ,
+with
+.B tcp!
+added when no protocol is given) or a device such as
+.BR #~/ns ,
+the 9vm host relay.  The mount uses
+.B \-A
+(no authentication).
 .TP
-.BI del " key"
-Remove a key.
+.B unmount
+.RI [ path ]
+Unmount
+.I path
+(default: the last mount, or
+.BR /n/store ).
 .TP
 .B clear
-Reset the title, text and keys.
+Clear the status message.
 .PP
-The page is regenerated for every request; it contains the title, the
-text lines, a data list and the count of applied commands.  A missing
-control file leaves the page empty but the listener running.
+The page is regenerated for every request.  It shows the display scale,
+the files in
+.B /n/host/dis
+with their size and whether they are installed, and the current mount.  A request for
+.BI /dis/ name
+returns that drop file as
+.B application/octet-stream
+rather than the page, so a peer can fetch a program without installing
+it.  A missing control file or drop directory leaves the corresponding
+section empty and the listener running.
+.PP
+Each drop file is listed as a link to
+.BR /dis/ name ,
+so a client can fetch it; the link label carries the size and whether
+the program is installed.  The scale line links to
+.BR /scale ,
+which replies with status 10 and takes a percentage as the input.  A
+valid percentage is applied and the client is redirected to
+.BR / ;
+anything else gets status 59.  Successful commands leave no message:
+their effect is the page.  A failure puts its reason above the scale
+line.
 .PP
 The certificate and key are kept in
 .B /keydb/gemini.cert
@@ -91,6 +145,24 @@ before clients can reach it.
 .B /n/host/gem/ctl
 append-only control file, written by the host
 .TP
+.B /n/host/dis
+host drop directory for
+.B .dis
+files; the guest only reads it
+.TP
+.B /dislocal
+writable overlay bound after
+.BR /dis ,
+where
+.B install
+puts programs
+.TP
+.B #g/scale
+display scale, a percentage
+.TP
+.B /n/store
+default 9P mount point
+.TP
 .B /keydb/gemini.cert
 leaf certificate, DER
 .TP
@@ -113,5 +185,17 @@ occupies its slot until the request deadline.
 .PP
 The control file is opened once at start; if it is absent the server
 does not retry.  The control state is a log: it is replayed from the
-beginning on each start, so a long-lived log is read in full.  There is
-one page and no per-URL routing.
+beginning on each start, so a long-lived log is read in full.
+.PP
+The mount lives in
+.IR gemserve 's
+namespace.  It is therefore visible to the page and to anything
+gemserve itself runs, but not to the shell or to other services, which
+have their own namespace copies.  Making a mount system-wide needs a
+mount service in init's namespace.
+.PP
+The drop directory and the
+.B /dis/
+download are not authenticated: anyone who can reach port 1965 can
+fetch the files, and anyone who can append to the control file can
+install them.  The control file's permissions are the policy.
