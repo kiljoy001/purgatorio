@@ -11,6 +11,15 @@
 #  else is replayed into the kernel's BearSSL TLS 1.2 session via
 #  $TLS->acceptpre.  The certificate and key are kept in /keydb.
 #
+#  Connections are handled one process each, with a fixed number of
+#  slots: when every slot is busy the listener stops accepting, so the
+#  kernel backlog provides backpressure instead of unbounded memory.
+#  A watchdog per connection hangs it up after CONNTIMEOUT, which also
+#  bounds a client that connects and never finishes the handshake.
+#  The control state is updated by its own process and read under a
+#  one-token channel lock, so a page cannot be built from a half-applied
+#  ctl line.
+#
 implement Gemserve;
 
 include "sys.m";
@@ -37,6 +46,8 @@ CTL:	con "/n/host/gem/ctl";
 CERT:	con "/keydb/gemini.cert";
 KEY:	con "/keydb/gemini.key";
 MAXKEYS:	con 64;
+NSLOT:	con 32;			# concurrent connections, including the accept
+CONNTIMEOUT:	con 20000;	# milliseconds per connection
 
 State: adt
 {
@@ -51,8 +62,19 @@ State: adt
 st: ref State;
 cert: array of byte;
 key: array of byte;
-pkraw: array of byte;		# bytes read while peeking at a connection
-pkhs: array of byte;		# handshake payload from those bytes
+Peek: adt
+{
+	raw:	array of byte;		# bytes read while peeking
+	hs:	array of byte;		# handshake payload from them
+};
+
+Watch: adt
+{
+	done:	int;
+};
+
+sem: chan of int;		# connection slots
+slock: chan of int;		# one-token lock for st
 
 # Byte readers and builders used by the TLS 1.3 path.
 Rd: adt
@@ -91,6 +113,11 @@ init(nil: ref Draw->Context, args: list of string)
 		st.keys[i] = "";
 		st.vals[i] = "";
 	}
+	sem = chan[NSLOT] of int;
+	for(i = 0; i < NSLOT; i++)
+		sem <-= 1;
+	slock = chan[1] of int;
+	slock <-= 1;
 
 	err := loadcert();
 	if(err != nil){
@@ -109,20 +136,128 @@ init(nil: ref Draw->Context, args: list of string)
 
 	spawn control(CTL);
 	for(;;){
+		# Take a slot before waiting for a call.  When all are busy
+		# no accept is posted, which leaves the queue in the kernel.
+		<-sem;
 		srv := dial->listen(c);
-		if(srv == nil)
+		if(srv == nil){
+			sem <-= 1;
+			sys->sleep(100);
 			continue;
+		}
 		fd := dial->accept(srv);
-		if(fd == nil)
+		if(fd == nil){
+			sem <-= 1;
+			sys->sleep(100);
 			continue;
-		k := peekhello(fd);
-		if(k == 1)
-			serve13(fd, pkhs);
-		else if(k == 0)
-			serve12(fd, pkraw);
-		fd = nil;
+		}
+		spawn handle(fd);
 	}
 
+}
+
+# handle owns one connection.  The watchdog is told when the work is
+# done, and the worker waits for its acknowledgement before closing the
+# descriptor, so the watchdog can never hang up a reused conversation.
+handle(fd: ref Sys->FD)
+{
+	path := sys->fd2path(fd);
+	w := ref Watch;
+	w.done = 0;
+	ack := chan[1] of int;
+	timed := 0;
+	if(path != nil){
+		spawn watchdog(path, CONNTIMEOUT, w, ack);
+		timed = 1;
+	}
+	{
+		p := ref Peek;
+		p.raw = nil;
+		p.hs = nil;
+		k := peekhello(fd, p);
+		if(k == 1)
+			serve13(fd, p.hs);
+		else if(k == 0)
+			serve12(fd, p.raw);
+	} exception e {
+	"*" =>
+		sys->fprint(sys->fildes(2), "gemserve: connection: %s\n", e);
+	}
+	w.done = 1;
+	if(timed)
+		<-ack;
+	fd = nil;
+	sem <-= 1;
+}
+
+watchdog(path: string, ms: int, w: ref Watch, ack: chan of int)
+{
+	left := ms;
+	while(left > 0 && w.done == 0){
+		s := 100;
+		if(left < s)
+			s = left;
+		sys->sleep(s);
+		left -= s;
+	}
+	if(w.done == 0){
+		peer := remoteof(path);
+		if(peer == "")
+			sys->fprint(sys->fildes(2), "gemserve: timeout after %d ms\n", ms);
+		else
+			sys->fprint(sys->fildes(2),
+				"gemserve: timeout after %d ms from %s\n", ms, peer);
+		hangupctl(path);
+	}
+	ack <-= 1;
+}
+
+# The conversation directory is /net/tcp/N; ctl and remote live there.
+dirpath(p: string): string
+{
+	i := len p - 1;
+	while(i > 0 && p[i] != '/')
+		i--;
+	if(i <= 0)
+		return "";
+	return p[0:i];
+}
+
+hangupctl(path: string)
+{
+	d := dirpath(path);
+	if(d == "")
+		return;
+	fd := sys->open(d + "/ctl", Sys->OWRITE);
+	if(fd == nil)
+		return;
+	sys->fprint(fd, "hangup");
+	fd = nil;
+}
+
+remoteof(path: string): string
+{
+	d := dirpath(path);
+	if(d == "")
+		return "";
+	b := readfile(d + "/remote");
+	if(b == nil)
+		return "";
+	s := string b;
+	while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == ' '))
+		s = s[0:len s-1];
+	return s;
+}
+
+# One token in slock serialises the control state.
+lock()
+{
+	<-slock;
+}
+
+unlock()
+{
+	slock <-= 1;
 }
 
 # ---- certificate ------------------------------------------------------
@@ -239,6 +374,7 @@ apply(line: string)
 {
 	if(line == "")
 		return;
+	lock();
 	cmd := line;
 	rest := "";
 	for(i := 0; i < len line; i++)
@@ -265,6 +401,7 @@ apply(line: string)
 		clear();
 	}
 	st.nctl++;
+	unlock();
 }
 
 split2(s: string): (string, string)
@@ -317,6 +454,7 @@ clear()
 
 page(): string
 {
+	lock();
 	s := "# " + st.title + "\n\n";
 	if(st.text != "")
 		s += st.text + "\n";
@@ -326,6 +464,7 @@ page(): string
 	for(i := 0; i < st.nkeys; i++)
 		s += st.keys[i] + ": " + st.vals[i] + "\n";
 	s += "\n## server\n\nctl writes " + string st.nctl + "\n";
+	unlock();
 	return s;
 }
 
@@ -348,9 +487,9 @@ serve12(fd: ref Sys->FD, pre: array of byte)
 # ---- version peek -----------------------------------------------------
 
 # Read just enough of the connection to tell 1.3 from 1.2, keeping the
-# bytes in pkraw (record stream) and pkhs (handshake payload).  Returns
+# bytes in p.raw (record stream) and p.hs (handshake payload).  Returns
 # 1 for TLS 1.3, 0 for anything else, -1 on a broken connection.
-peekhello(fd: ref Sys->FD): int
+peekhello(fd: ref Sys->FD, p: ref Peek): int
 {
 	raw := array[8192] of byte;
 	hs := array[8192] of byte;
@@ -390,9 +529,9 @@ peekhello(fd: ref Sys->FD): int
 	}
 	if(rawn == 0)
 		return -1;
-	pkraw = raw[0:rawn];
-	pkhs = hs[0:hsn];
-	if(is13(pkhs))
+	p.raw = raw[0:rawn];
+	p.hs = hs[0:hsn];
+	if(is13(p.hs))
 		return 1;
 	return 0;
 }
@@ -1005,9 +1144,13 @@ tapp(d: array of byte, off: int, a: array of byte): int
 	return off + len a;
 }
 
+# /dev/random accumulates a byte every few clock ticks (about 52 ms
+# here), so a 32-byte read per handshake would cost seconds.  Ephemeral
+# keys and paddings come from the kernel's fast X9.17 generator, which
+# is seeded once from /dev/random; long-term keys still use /dev/random.
 randombytes(n: int): array of byte
 {
-	fd := sys->open("/dev/random", Sys->OREAD);
+	fd := sys->open("/dev/notquiterandom", Sys->OREAD);
 	if(fd == nil)
 		return nil;
 	b := array[n] of byte;

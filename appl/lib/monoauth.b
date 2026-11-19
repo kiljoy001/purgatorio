@@ -741,7 +741,7 @@ link(keyfile: string, fd: ref Sys->FD, isserver: int): (ref Link, string)
 
 	ephx := readrandom(32);
 	if(ephx == nil)
-		return (nil, "cannot read /dev/random");
+		return (nil, "cannot read /dev/notquiterandom");
 	ephpk := mono->xpublic(ephx);
 	if(ephpk == nil)
 		return (nil, "ephemeral key generation failed");
@@ -1032,9 +1032,12 @@ hex(a: array of byte): string
 	return s;
 }
 
+# Ephemeral keys only: /dev/random accumulates about one byte per 50 ms,
+# so it is too slow for a handshake.  The fast generator is seeded from
+# it once, by init or by the first user.
 readrandom(n: int): array of byte
 {
-	fd := sys->open("/dev/random", Sys->OREAD);
+	fd := sys->open("/dev/notquiterandom", Sys->OREAD);
 	if(fd == nil)
 		return nil;
 	buf := array[n] of byte;

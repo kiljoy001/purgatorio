@@ -61,6 +61,17 @@ mints a self-signed ECDSA P-256 leaf with
 .IR tls (2);
 later starts reuse it, so the trust-on-first-use fingerprint is stable.
 .PP
+Connections are handled one process each, up to 32 at a time, with one
+slot held by the accept loop.  When every slot is busy the listener
+stops accepting, so the kernel backlog provides backpressure instead of
+unbounded memory.  A watchdog gives each connection a 20-second
+deadline and hangs up the underlying TCP conversation through its
+.B ctl
+file if the handshake, the request or the response has not finished.
+This covers a client that connects and sends nothing, and it interrupts
+a TLS 1.2 handshake that is blocked inside BearSSL.  A timed-out
+connection is reset, and the event is logged with the peer address.
+.PP
 .B gemserve
 listens on TCP port 1965 on all interfaces.  The guest needs an
 address on the host tap (for example
@@ -89,8 +100,13 @@ ECDSA P-256 private scalar
 .SH BUGS
 The TLS 1.3 handshake does not send session tickets or support
 resumption, and it requires the client to offer X25519 and an ECDSA
-P-256 signature.  Connections are served one at a time; a client that
-connects and sends nothing blocks the listener until it is killed.
+P-256 signature.
+.PP
+The concurrency limit is a global 32 slots, not a per-address rate
+limit, and the 20-second deadline is one budget for the whole
+connection rather than separate handshake and request timeouts.  A
+client that completes a handshake and then reads slowly still occupies
+its slot until the deadline.
 .PP
 The control file is opened once at start; if it is absent the server
 does not retry.  The control state is a log: it is replayed from the
