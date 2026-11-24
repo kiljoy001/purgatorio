@@ -276,7 +276,10 @@ the value of a millisecond counter
 .TP
 .B time
 number of microseconds since the epoch 00:00:00 GMT, Jan. 1, 1970.
-(Can be written once by the privileged user, to set at boot time.)
+(Can be written by the privileged user to set it: a write sets it
+exactly, sub-second part included.
+.IR timed (8)
+writes it to keep the clock in step.)
 .SH SOURCE
 .B /emu/port/devcons.c
 .br
