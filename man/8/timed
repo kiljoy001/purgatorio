@@ -101,6 +101,8 @@ is the round trip through the host filesystem.  With SNTP,
 is 1 and
 .I delay_us
 is the four-timestamp round trip.
+.I source
+is empty until some source has been read.
 .B now
 and
 .B mono
