@@ -1054,6 +1054,7 @@ static long
 conswrite(Chan *c, void *va, long n, vlong offset)
 {
 	vlong t;
+	vlong us;
 	long l, bp;
 	char *a = va;
 	Cmdbuf *cb;
@@ -1114,13 +1115,19 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 		strncpy(buf, a, n);
 		buf[n] = 0;
 		/*
-		 * The value is microseconds, and the sub-second part is
-		 * kept so a slew can move the clock by less than a
-		 * second instead of stepping it.
+		 * The value is microseconds, and the sub-second part must
+		 * survive: osusectime() is boottime*1e6 + TK2MS(ticks)*1000
+		 * + bootusec, so subtract what the tick counter already
+		 * contributes and keep the remainder.  Setting boottime
+		 * from TK2SEC alone (which truncates) would put that
+		 * fraction back into the clock on every write, moving it
+		 * forward by up to a second and making a slew impossible.
 		 */
 		t = strtoll(buf, 0, 0);
-		boottime = t/1000000 - TK2SEC(MACHP(0)->ticks);
-		bootusec = t % 1000000;
+		us = (vlong)TK2MS(MACHP(0)->ticks)*1000;
+		t -= us;
+		boottime = t/1000000;
+		bootusec = t%1000000;
 		if(bootusec < 0){
 			bootusec += 1000000;
 			boottime--;

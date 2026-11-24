@@ -184,8 +184,9 @@ loopback()
 }
 
 # The hypervisor gives the guest no RTC, so the clock starts at 1970.
-# Read the host's epoch and set /dev/time, without which every
-# certificate expiry check is meaningless.
+# 9vm serves its clock at /n/host/time as microseconds since the epoch
+# (older hosts published seconds); read it and set /dev/time, without
+# which every certificate expiry check is meaningless.
 setclock()
 {
 	fd := sys->open("/n/host/time", Sys->OREAD);
@@ -204,15 +205,19 @@ setclock()
 		e = e*big 10 + big (s[i] - '0');
 	if(e <= big 0)
 		return;
+	# A value below 1e11 is seconds (the old format); anything larger is
+	# already microseconds.
+	if(e < big 100000000000)
+		e *= big 1000000;
 	cfd := sys->open("/dev/time", Sys->OWRITE);
 	if(cfd == nil){
 		sys->print("init: cannot open /dev/time: %r\n");
 		return;
 	}
-	if(sys->fprint(cfd, "%bd", e * big 1000000) < 0)
+	if(sys->fprint(cfd, "%bd", e) < 0)
 		sys->print("init: cannot set the clock: %r\n");
 	else
-		sys->print("init: clock set from host to %bd\n", e);
+		sys->print("init: clock set from host to %bd\n", e / big 1000000);
 	cfd = nil;
 }
 

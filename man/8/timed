@@ -11,26 +11,33 @@ timed \- wall clock, SNTP discipline and time status
 .IR seconds ]
 .SH DESCRIPTION
 .B timed
-owns the wall clock.  It sets a coarse time at boot and then, when
-servers are configured, disciplines it with SNTP.
+owns the wall clock.  It takes the time from the hypervisor when there
+is one, from SNTP otherwise, and disciplines it thereafter.
 .PP
 There are two clocks.  The wall clock is
 .BR /dev/time :
 microseconds since the epoch, writable by the host owner, and shared by
-every namespace.  The monotonic clock is
+every namespace.  A write sets it exactly, sub-second part included, so
+it can be moved by less than a second at a time.  The monotonic clock is
 .BR millisec (2)
 in the kernel (milliseconds since boot) and
 .BR clock_gettime (2)
 under the emulator; it is never set, and timeouts should use it.
 .PP
-At start,
-.B timed
-reads
-.BR /dev/time .
-If it is before 2020 it tries
-.BR /n/host/time ,
-the epoch the 9vm host writes into the 9P tree (the guest has no RTC).
-Otherwise the clock is accepted as a coarse host source.
+The clock source on 9vm is the host's own.  The guest has no RTC, so the
+hypervisor serves
+.B /n/host/time
+as a virtual file: microseconds since the epoch, formatted when it is
+read.  (The service reads
+.B /dev/time
+either side of that request and takes the midpoint, because the round
+trip through the host filesystem can take a tick.)  At start it sets
+.B /dev/time
+from it and then measures it again every second: an error over one
+second is stepped, a smaller one is handed to the slew described below.
+If the host stops publishing the file, or the guest has no host
+filesystem, SNTP is the source and a clock still at 1970 stays wrong
+until a server answers.
 .PP
 Servers come from
 .B -s
@@ -80,6 +87,20 @@ pending_us=N
 .PP
 .B pending_us
 is the part of the last measured offset still to be slewed.
+With the host source,
+.I server
+is
+.BR host ,
+.I stratum
+is 0,
+.I verified
+is 0 (nothing vouches for the host's clock but the host), and
+.I delay_us
+is the round trip through the host filesystem.  With SNTP,
+.I verified
+is 1 and
+.I delay_us
+is the four-timestamp round trip.
 .B now
 and
 .B mono

@@ -1,13 +1,16 @@
 #
-#  timed -- wall-clock service: boot source, SNTP discipline, status.
+#  timed -- wall-clock service: host clock, SNTP discipline, status.
 #
 #  Two clocks:
 #    wall      /dev/time, microseconds since the epoch, settable
 #    monotonic sys->millisec(), milliseconds since boot, never set
 #
-#  timed reads a coarse time at boot (the host's epoch on 9vm), then
-#  queries SNTP servers: -s options, /lib/ndb/time, or the public
-#  anycast defaults.  It steps /dev/time when the offset is large.  It publishes ordinary files in a directory (default
+#  On 9vm the host serves its own clock at /n/host/time, read at the
+#  moment of the request (the guest has no RTC); timed sets /dev/time
+#  from it at start and holds the clock to it every second, stepping a
+#  large error and slewing a small one.  Without a host clock it queries
+#  SNTP servers instead: -s options, /lib/ndb/time, or the public
+#  anycast defaults.  It publishes ordinary files in a directory (default
 #  /n/time):
 #
 #    status   source, sync state, offset, delay, stratum, last sync,
@@ -100,27 +103,19 @@ init(nil: ref Draw->Context, args: list of string)
 		return;
 	}
 
-	# A coarse source first: on 9vm the host writes its epoch into the
-	# 9P tree, and the kernel has no RTC.
-	cur := readtime();
-	if(cur >= FLOOR){
-		st.source = "host";
-		st.synced = 1;
-		st.last = cur / big 1000000;
-	}else{
-		h := hosttime();
-		if(h > big 1577836800){
-			if(settime(h * big 1000000) == nil){
-				st.source = "host";
-				st.synced = 1;
-				st.last = h;
-				sys->print("timed: clock set from host to %bd\n", h);
-			}
-		}
-	}
+	# The clock source on 9vm is the host's own: the hypervisor serves
+	# /n/host/time, read at the moment of the request, and the kernel has
+	# no RTC.  Take it now so services start with a real date, and hold
+	# the clock to it every second below.  SNTP is the fallback when no
+	# host clock is published.
+	hostsync();
+	if(st.source != "host" && readtime() < FLOOR)
+		sys->print("timed: no host clock; waiting for SNTP\n");
 
 	for(;;){
-		if(st.servers != nil && !busy && sys->millisec() >= st.nextsync)
+		hostsync();
+		if(st.source != "host" && st.servers != nil && !busy &&
+		   sys->millisec() >= st.nextsync)
 			spawn dosync();
 		slewstep();
 		publish();
@@ -129,6 +124,44 @@ init(nil: ref Draw->Context, args: list of string)
 }
 
 # ---- state ------------------------------------------------------------
+
+# Read the host clock and hold the guest to it.  A large error is stepped
+# (a wrong date is worse than a jump); a small one is left to slewstep(),
+# a fraction per second, so the wall clock stays monotonic.
+hostsync()
+{
+	t1 := readtime();
+	h := hosttime();
+	t4 := readtime();
+	if(h < FLOOR){
+		# The host stopped publishing (or never did): let SNTP take over.
+		if(st.source == "host"){
+			st.source = "";
+			st.synced = 0;
+			st.pend = big 0;
+		}
+		return;
+	}
+	# The host formats its clock somewhere inside the round trip, which
+	# goes through the shared ring and can take a tick; the midpoint of
+	# the two guest readings is when it was taken.
+	cur := (t1 + t4) / big 2;
+	off := h - cur;
+	st.source = "host";
+	st.synced = 1;
+	st.server = "host";
+	st.stratum = 0;
+	st.delay = t4 - t1;
+	st.offset = off;
+	st.last = h / big 1000000;
+	if(cur < FLOOR || abs(off) > STEP){
+		if(settime(h) == nil)
+			st.pend = big 0;
+	}else if(abs(off) > MINSLEW)
+		st.pend = off;
+	else
+		st.pend = big 0;
+}
 
 addserver(s: string)
 {
@@ -344,6 +377,9 @@ settime(us: big): string
 	return nil;
 }
 
+# The host serves microseconds since the epoch, read at the moment of the
+# request.  An older host published seconds; anything below 1e11 is taken
+# as seconds.
 hosttime(): big
 {
 	fd := sys->open(HOSTTIME, Sys->OREAD);
@@ -361,6 +397,8 @@ hosttime(): big
 			break;
 		e = e * big 10 + big (s[i] - '0');
 	}
+	if(e > big 0 && e < big 100000000000)
+		e *= big 1000000;
 	return e;
 }
 
