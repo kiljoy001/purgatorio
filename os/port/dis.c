@@ -1171,13 +1171,11 @@ disinit(void *a)
 
 	/*
 	 * Compile Dis modules to native 386 code on load (the JIT in
-	 * libinterp/comp-386.c).  It is compiled into the kernel but was
-	 * never switched on here, so everything ran through the bytecode
-	 * interpreter.  Enabling it is a large win for CPU-bound Limbo
-	 * (window manager, editors, the shell): a 5M-iteration integer
-	 * loop goes from ~80ms to under 1ms.  I/O-bound paths (the kfs 9P
-	 * round-trip) are unchanged, as expected.  Set /dev/jit to 0 to
-	 * fall back to the interpreter at boot.
+	 * libinterp/comp-386.c).  It is a large win for CPU-bound Limbo
+	 * (a 5M-iteration integer loop goes from ~80ms to under 1ms).
+	 * It is on by default; init turns it off when /n/host/jit says 0,
+	 * and /dev/jit remains writable at run time (see the JIT note in
+	 * the 9vm README).
 	 */
 	cflag = 1;
 	root = load(initmod);

@@ -83,6 +83,7 @@ init(drawcontext: ref Draw->Context, nil: list of string)
 #	sys->bind("#O", "/dev", sys->MAFTER);	# Modem
 #	sys->bind("#T","/dev",sys->MAFTER);	# Touchscreen
 
+	selectjit();
 	loopback();
 	netstart();
 	setclock();
@@ -219,6 +220,34 @@ setclock()
 	else
 		sys->print("init: clock set from host to %bd\n", e / big 1000000);
 	cfd = nil;
+}
+
+# The Dis JIT (cflag in os/port/dis.c) is on by default.  /n/host/jit
+# overrides it for a boot: 0 runs the interpreter, 1 compiles modules on
+# load.  The console can also write /dev/jit directly.
+selectjit()
+{
+	fd := sys->open("/n/host/jit", Sys->OREAD);
+	if(fd == nil)
+		return;
+	buf := array[8] of byte;
+	n := sys->read(fd, buf, len buf);
+	fd = nil;
+	i := 0;
+	while(i < n && (buf[i] == byte ' ' || buf[i] == byte '\t' || buf[i] == byte '\n'))
+		i++;
+	if(i >= n || (buf[i] != byte '0' && buf[i] != byte '1'))
+		return;
+	v := string buf[i:i+1];
+	if((jfd := sys->open("/dev/jit", Sys->OWRITE)) != nil){
+		if(sys->fprint(jfd, "%s", v) > 0){
+			if(v == "1")
+				sys->print("init: Dis JIT on\n");
+			else
+				sys->print("init: Dis JIT off\n");
+		}
+		jfd = nil;
+	}
 }
 
 # First boot: create the signer key and the console user's certificate

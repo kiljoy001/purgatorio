@@ -183,7 +183,7 @@ mono_init_signer()
 	}
 	seed := readrandom(32);
 	if(seed == nil){
-		sys->fprint(stderr, "certify: cannot read /dev/random\n");
+		sys->fprint(stderr, "certify: cannot read /dev/notquiterandom\n");
 		return;
 	}
 	(sk, nil) := mono->edkeypair(seed);
@@ -391,7 +391,7 @@ rotate(): int
 	}
 	seed := readrandom(32);
 	if(seed == nil){
-		sys->fprint(stderr, "certify: cannot read /dev/random\n");
+		sys->fprint(stderr, "certify: cannot read /dev/notquiterandom\n");
 		return -1;
 	}
 	(sk, pk) := mono->edkeypair(seed);
@@ -612,9 +612,14 @@ trim(s: string): string
 
 # ---- small helpers for the EdDSA identity files ----------------------
 
+# Key seeds come from the X9.17 CSPRNG, seeded once from the strong
+# pool.  /dev/random itself is not usable for this: every read that
+# drains its buffer doubles what it waits for before returning
+# (os/port/random.c), so the seeds a first boot needs would take
+# minutes and the delay would grow with each one.
 readrandom(n: int): array of byte
 {
-	fd := sys->open("/dev/random", Sys->OREAD);
+	fd := sys->open("/dev/notquiterandom", Sys->OREAD);
 	if(fd == nil)
 		return nil;
 	buf := array[n] of byte;
