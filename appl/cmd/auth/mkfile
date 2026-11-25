@@ -21,6 +21,7 @@ TARG=\
 	passwd.dis\
 	rsagen.dis\
 	secstore.dis\
+	secstore2.dis\
 	signer.dis\
 	verify.dis\
 
@@ -41,3 +42,4 @@ DISBIN=$ROOT/dis/auth
 <$ROOT/mkfiles/mkdis
 <$ROOT/mkfiles/mksubdirs
 certify.dis:	$MODDIR/mono.m $MODDIR/monosigner.m
+secstore2.dis:	$MODDIR/secstore2.m $MODDIR/mono.m

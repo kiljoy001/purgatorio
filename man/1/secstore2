@@ -1,0 +1,148 @@
+.TH SECSTORE2 1
+.SH NAME
+secstore2 \- Monocypher-backed secure storage
+.SH SYNOPSIS
+.B auth/secstore2
+[
+.BI -d " root"
+] [
+.BI -u " user"
+] [
+.BI -P " pass"
+] [
+.BI -N " newpass"
+] [
+.BI -e " epoch"
+]
+.BI cmd
+[
+.I name
+]
+.SH DESCRIPTION
+.I Secstore2
+manages a per-user store of encrypted files.
+It is a separate application from the legacy
+.IR secstore (1)
+service: the files are sealed locally with
+Argon2id, XChaCha20-Poly1305 and BLAKE2b-256 as described in
+.IR secstore2 (2),
+and only ciphertext is written to the store.
+The usual file is
+.BR factotum ,
+holding
+.IR factotum (4)
+keys ready to be loaded.
+.PP
+A store lives under
+.IB root / user / name\fR.
+File names are restricted to
+.BR A-Za-z0-9._-
+and may not begin with a dot.
+The store and user directories are mode 0700 and files are mode 0600.
+.PP
+The commands are:
+.TP
+.B init
+Create the store directories.
+.TP
+.B list
+List each file with its epoch, revision, ciphertext size,
+plaintext size and the first 16 bytes of the trailing BLAKE2b digest.
+.TP
+.BI "get " name
+Decrypt
+.I name
+to standard output.
+.TP
+.BI "put " name
+Encrypt standard input into
+.IR name .
+Every file in a store shares one password; the password is checked
+against the file being replaced, or another file in the store, and the
+new file reuses that file's KDF parameters, salt and epoch.
+Only the first file in an empty store gets a fresh salt, and only that
+first
+.B put
+asks for the password twice.
+Replacing a file bumps its revision.
+.TP
+.BI "verify " name
+Decrypt
+.I name
+and report the plaintext length.
+.TP
+.BI "digest " name
+Print the BLAKE2b-256 digest of the whole encrypted file.
+.TP
+.B passwd
+Decrypt every file with the old password, then re-encrypt all of them
+under one new salt, increasing each epoch and revision.
+Nothing is installed unless every file decrypts and seals.
+.PP
+The options are:
+.TP
+.BI -d " root"
+Store root; the default is
+.BR $home/lib/secstore2 .
+.TP
+.BI -u " user"
+Store user; the default is
+.BR $SC2_USER ,
+or the user in
+.BR /dev/user .
+.TP
+.BI -P " pass"
+Use
+.I pass
+as the password instead of prompting.
+.TP
+.BI -N " newpass"
+Use
+.I newpass
+as the new password for
+.BR passwd .
+.TP
+.BI -e " epoch"
+Set the epoch for
+.BR put ;
+it may not be lower than the existing file's.
+.PP
+Passwords are read from the console with echo off.
+The defaults for Argon2id are
+.IR t =3,
+.IR m =256
+MiB and one lane, which is also the floor and ceiling accepted for
+.I m
+(64 MiB to 256 MiB).
+The emulator's default main memory pool is 32 MiB, too small for the
+64 MiB floor; start
+.I emu
+with, for example,
+.B -p main=512m
+to use this store.
+.SH EXAMPLES
+Fetch the keys and load them:
+.IP
+.EX
+auth/secstore2 -u glenda get factotum >/mnt/factotum/ctl
+.EE
+.PP
+Save an edited key file:
+.IP
+.EX
+auth/secstore2 -u glenda put factotum <factotum
+.EE
+.SH SOURCE
+.B /appl/cmd/auth/secstore2.b
+.br
+.B /appl/lib/secstore2.b
+.SH SEE ALSO
+.IR secstore2 (2),
+.IR secstore (1),
+.IR factotum (4)
+.SH BUGS
+The current
+.I Mono
+binding supports only one Argon2id lane, so files with a different
+.I p
+in their header are rejected.

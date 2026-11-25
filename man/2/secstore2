@@ -1,0 +1,156 @@
+.TH SECSTORE2 2
+.SH NAME
+secstore2 \- Monocypher-backed secure store file format
+.SH SYNOPSIS
+.EX
+include "secstore2.m";
+secstore2 := load Secstore2 Secstore2->PATH;
+
+Head: adt {
+	t, m, p, keylen:	int;
+	salt:			array of byte;
+	nonce:			array of byte;
+	ptxlen, epoch, rev:	int;
+	ownerlen, namelen:	int;
+	owner, name:		string;
+};
+
+init:		fn();
+headinit:	fn(owner, name: string): ref Head;
+clone:		fn(h: ref Head): ref Head;
+parsehead:	fn(in: array of byte): (int, ref Head, string);
+derive:		fn(h: ref Head, pass: array of byte): (array of byte, string);
+sealkey:	fn(h: ref Head, key: array of byte, plain: array of byte):
+			(array of byte, string);
+seal:		fn(h: ref Head, pass: array of byte, plain: array of byte):
+			(array of byte, string);
+openkey:	fn(in: array of byte, h: ref Head, key: array of byte):
+			(array of byte, string);
+open:		fn(in: array of byte, pass: array of byte):
+			(array of byte, ref Head, string);
+digest:		fn(in: array of byte): array of byte;
+samekdf:	fn(a, b: ref Head): int;
+validname:	fn(name: string): int;
+hex:		fn(a: array of byte): string;
+unhex:		fn(s: string): array of byte;
+wipe:		fn(a: array of byte);
+.EE
+.SH DESCRIPTION
+.B Secstore2
+implements the
+.I secstore2
+file format: one encrypted file is one blob, sealed with Argon2id,
+XChaCha20-Poly1305 and BLAKE2b-256.
+The layout is:
+.EX
+offset	size	field
+0	4	magic "SC2\\0"
+4	1	version = 2
+5	1	kdf = 1 (Argon2id)
+6	1	aead = 1 (XChaCha20-Poly1305)
+7	1	flags = 0
+8	4	t (passes, LE32)
+12	4	m (KiB, LE32)
+16	4	p (lanes, LE32)
+20	4	keylen = 32
+24	16	salt
+40	24	nonce
+64	4	plaintext length
+68	4	epoch
+72	4	revision
+76	4	owner length
+80	4	name length
+84	12	reserved (zero)
+96	...	owner bytes, name bytes
+...	...	ciphertext
+...	16	Poly1305 tag
+last	32	BLAKE2b-256 over everything before it
+.EE
+.PP
+The 96-byte header and the owner and name bytes are the associated data
+passed to the AEAD, so a renamed, re-versioned or parameter-downgraded
+file fails authentication even if the trailing digest is recomputed.
+The digest is a content identifier for synchronisation, not a password
+check.
+.PP
+The file key is
+.IP
+.EX
+master  = Argon2id(password, salt, t, m KiB, p, 32)
+filekey = BLAKE2b-256("secstore2 file" || master)
+.EE
+.IP
+The client enforces a floor of 64 MiB and a ceiling of 256 MiB for
+.IR m ,
+and this implementation requires
+.IR p =1
+because the
+.I Mono
+Argon2id binding is single-lane.
+The default parameters are
+.IR t =3,
+.IR m =262144
+and
+.IR p =1.
+.PP
+.B Init
+must be called before the functions that use
+.IR Mono ;
+it loads the module and is idempotent.
+.PP
+.B Headinit
+returns a header with the default KDF parameters, zero salt and nonce,
+epoch and revision one, and the given owner and name.
+The caller fills in salt, nonce, epoch and revision as needed.
+.B Clone
+returns a copy of a header.
+.PP
+.B Parsehead
+checks the magic, version, algorithms, lengths and total size.
+It returns
+.RI ( ok , " h" , " err" );
+.I ok
+is one on success, and
+.I err
+is a diagnostic otherwise.
+.PP
+.B Derive
+returns the file key for a header and password, enforcing the KDF
+floor, ceiling and parameter limits before doing any work.
+.B Sealkey
+and
+.B Openkey
+seal and open a blob with an already derived key;
+.B Seal
+and
+.B Open
+combine the key derivation with them.
+.B Open
+returns
+.RI ( plain , " h" , " err" ).
+.PP
+.B Digest
+returns the BLAKE2b-256 digest of the whole blob.
+.B Samekdf
+reports whether two headers derive the same key from the same password.
+.PP
+.B Validname
+accepts
+.BR A-Za-z0-9._-
+with no leading dot and at most 255 bytes.
+.B Hex
+and
+.B Unhex
+convert between bytes and lower-case hexadecimal.
+.B Wipe
+zeroes a buffer; call it on every key, password and plaintext array.
+.SH SOURCE
+.B /appl/lib/secstore2.b
+.br
+.B /module/secstore2.m
+.SH SEE ALSO
+.IR secstore2 (1),
+.IR secstore (1),
+.IR mono (2)
+.SH BUGS
+Only one Argon2id lane is supported.

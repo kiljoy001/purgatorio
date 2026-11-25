@@ -114,6 +114,7 @@ TARG=\
 	scoretable.dis\
 	scsiio.dis\
 	secstore.dis\
+	secstore2.dis\
 	selectfile.dis\
 	sets.dis\
 	sets32.dis\
@@ -246,6 +247,7 @@ scsiio.dis:	$ROOT/module/scsiio.m
 dhcpclient.dis:	$ROOT/module/dhcp.m
 ubfa.dis: $ROOT/module/ubfa.m
 secstore.dis:	$ROOT/module/secstore.m
+secstore2.dis:	$ROOT/module/secstore2.m $ROOT/module/mono.m
 ida.dis:	$ROOT/module/ida.m
 rfc822.dis:	$ROOT/module/rfc822.m
 csv.dis: $ROOT/module/csv.m
