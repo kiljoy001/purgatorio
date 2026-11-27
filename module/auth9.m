@@ -28,6 +28,7 @@ Auth9: module
 	AuthCram: con 12; 	# CRAM verification for IMAP (RFC2195 & rfc2104)
 	AuthHttp: con 13; 	# http domain login
 	AuthVNC: con 14; 	# VNC server login (deprecated)
+	AuthPAK: con 19; 	# authenticated diffie hellman key agreement
 
 
 	AuthTs: con 64;	# ticket encrypted with server's key

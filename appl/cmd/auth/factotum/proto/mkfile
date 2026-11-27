@@ -15,6 +15,9 @@ SYSMODULES=\
 	draw.m\
 	bufio.m\
 	string.m\
+	authpak.m\
+	form1.m\
+	dp9ik.m\
 
 MODULES=\
 	../authio.m\

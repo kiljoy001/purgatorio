@@ -21,6 +21,7 @@ TARG=\
 	attrhash.dis\
 	auth.dis\
 	auth9.dis\
+	authpak.dis\
 	bloomfilter.dis\
 	bufio.dis\
 	cfg.dis\
@@ -44,11 +45,13 @@ TARG=\
 	diskblocks.dis\
 	disks.dis\
 	dividers.dis\
+	dp9ik.dis\
 	env.dis\
 	ether.dis\
 	exception.dis\
 	factotum.dis\
 	filepat.dis\
+	form1.dis\
 	format.dis\
 	fsfilter.dis\
 	fslib.dis\
@@ -231,6 +234,9 @@ tftp.dis:	$ROOT/module/tftp.m
 registries.dis:	$ROOT/module/registries.m
 keyset.dis:	$ROOT/module/keyset.m
 auth9.dis: $ROOT/module/auth9.m
+authpak.dis: $ROOT/module/authpak.m
+form1.dis: $ROOT/module/form1.m
+dp9ik.dis: $ROOT/module/dp9ik.m $ROOT/module/form1.m $ROOT/module/authpak.m
 factotum.dis:	$ROOT/module/factotum.m
 sexprs.dis:	$ROOT/module/sexprs.m
 dbm.dis: $ROOT/module/dbm.m
